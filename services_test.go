@@ -185,7 +185,7 @@ func TestNamedConfigValidation(t *testing.T) {
 	// Workers can run without any HTTP route; explicit routes can leave paths unmatched.
 	c := checkedConfig(t, root, config{Port: 21010, ControlPort: 21011, APIPrefix: "/api", TimeoutSeconds: 3, Worktrees: map[string]worktree{"jobs": {Services: map[string]service{"job": worker}}, "web": {Services: map[string]service{"web": web}, Routes: []route{{Prefix: "/only", Service: "web"}}}}})
 	result := httptest.NewRecorder()
-	serveSelection(routesFor("web", c.Worktrees["web"]), result, httptest.NewRequest("GET", "http://localhost/unmatched", nil))
+	newManager(context.Background(), c).serveSelection(routesFor("web", c.Worktrees["web"]), result, httptest.NewRequest("GET", "http://localhost/unmatched", nil))
 	if result.Code != 404 {
 		t.Fatal(result.Code)
 	}

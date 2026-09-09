@@ -6,7 +6,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -29,21 +28,12 @@ func doctor(c config, out io.Writer) error {
 	client := &http.Client{Timeout: time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	defer client.CloseIdleConnections()
 	state := previewState{}
-	token, err := os.ReadFile(filepath.Join(c.root, ".flip", "token"))
+	_, err := probeSupervisor(c)
 	if err == nil {
-		req, _ := http.NewRequest("POST", "http://"+address(c.ControlPort), strings.NewReader(`{"Action":"inspect"}`))
-		req.Header.Set("Authorization", "Bearer "+string(token))
-		req.Header.Set("Content-Type", "application/json")
-		resp, e := client.Do(req)
-		if e == nil {
-			if resp.StatusCode == 200 {
-				err = json.NewDecoder(io.LimitReader(resp.Body, 1024*1024)).Decode(&state)
-			} else {
-				err = fmt.Errorf("HTTP %d", resp.StatusCode)
-			}
-			resp.Body.Close()
-		} else {
-			err = e
+		var data []byte
+		data, err = controlRequest(c, "inspect", "", "", time.Second)
+		if err == nil {
+			err = json.Unmarshal(data, &state)
 		}
 	}
 	online := err == nil
