@@ -2,7 +2,7 @@
 
 One browser address for several running worktrees. Written in Go with no third-party dependencies.
 
-Flip owns `http://localhost:8080`. It forwards HTTP and WebSocket traffic to the selected worktree's configured processes. Use any language or framework: a single web server, an API alone, or separate frontend and API servers. Each service controls whether switching restarts it.
+Flip owns `http://localhost:8080`. It forwards HTTP and WebSocket traffic to the selected worktree's configured processes. Use any language or framework: a single web server, several named HTTP services, or HTTP services with opt-in foreground workers. Optional per-worktree ports keep several previews open side by side. Each service controls whether switching restarts it.
 
 ## Start
 
@@ -40,7 +40,7 @@ Keep `serve` running. In another terminal, from the same directory:
 
 To install `flip` on your Go binary path, run `go install .`. With that directory on PATH, use `flip main` as shorthand for `flip use main`. Existing commands such as `flip status` still work; use `flip use status` if a worktree has a reserved command name.
 
-On Linux/macOS, build with `go build -o flip .` and use `./flip`. Config lookup uses `-config`, then `-project`, then `FLIP_CONFIG`, then the nearest ancestor `flip.json`. From a linked Git worktree with no local config, Flip checks registered configs in the same repository, then the main checkout’s `flip.json`. Multiple registered configs require an explicit `-project`. Put flags before the command. `serve` must still be running.
+On Linux/macOS, build with `go build -o flip .` and use `./flip`. Config lookup uses `-config`, then `-project`, then `FLIP_CONFIG`, then the nearest ancestor `flip.json`. From a linked Git worktree with no local config, Flip checks registered configs in the same repository, then the main checkout's `flip.json`. Multiple registered configs require an explicit `-project`. Put flags before the command. `serve` must still be running.
 
 ## Configuration
 
@@ -56,9 +56,9 @@ On Linux/macOS, build with `go build -o flip .` and use `./flip`. Config lookup 
 
 The template uses a placeholder command, `your-dev-server`. Replace it with your actual executable and arguments. Flip does not install frameworks or infer their startup flags.
 
-`ui` and `backend` are routing roles, not technology choices. Configure either or both. With only `ui`, all paths go to it unchanged. With only `backend`, all paths go to it; `strip_api_prefix` still applies to matching API paths. With both, the API prefix routes to `backend` and other requests route to `ui`.
+`ui` and `backend` are routing roles, not technology choices. Legacy configs can configure either or both. They normalize to named services internally. With only `ui`, all paths go to it unchanged. With only `backend`, all paths go to it; `strip_api_prefix` still applies to matching API paths. With both, the API prefix routes to `backend` and other requests route to `ui`.
 
-Each service accepts `restart_on_use`. Set it to `false` for a server that already reloads edits, or `true` for a process that must restart or rebuild. Defaults preserve existing configurations: `false` for `ui`, `true` for `backend`. Explicit `restart` always restarts the requested service.
+Each service accepts `restart_on_use`. Set it to `false` for a server that already reloads edits, or `true` for a process that must restart or rebuild. Named services default to `false`. Legacy defaults remain `false` for `ui`, `true` for `backend`. Explicit `restart` always restarts the requested service.
 
 For example, an existing Go HTTP application that reads `PORT` can use a backend service with `command: ["go", "run", "."]`, `env: {"PORT": "{port}"}`, and `restart_on_use: true`. A Node application can use `["node", "server.js"]` with the same environment convention. Use the flags or environment variables your own application actually supports.
 
@@ -100,13 +100,43 @@ Use one service template for every existing Git worktree:
 }
 ```
 
-`repo` is relative to the config. Service directories are relative to each discovered worktree and must stay inside it. Replace the placeholder command with the app’s real command. HTTP service ports must be omitted in the template; Flip assigns them. Worker services retain port zero. The template accepts the same `routes` as a named-service worktree. Set `preview: true` to allocate an additional fixed preview port for each worktree; the default is false.
+`repo` is relative to the config. Service directories are relative to each discovered worktree and must stay inside it. Replace the placeholder command with the app's real command. HTTP service ports must be omitted in the template; Flip assigns them. Worker services retain port zero. The template accepts the same `routes` as a named-service worktree. Set `preview: true` to allocate an additional fixed preview port for each worktree; the default is false.
 
 `flip discover` prints names, service ports, preview ports and directories without starting servers. Names come from checkout directory names, with punctuation replaced by hyphens. Duplicate names get path-derived suffixes. Explicit `worktrees` entries with a discovered name replace that whole generated entry, retaining their configured ports and config-relative directories. Other explicit entries also remain available. Legacy `ui` and `backend` configurations still work.
 
 New assignments skip listening ports and saved assignments from other configs. Existing assignments remain unchanged across commands and supervisor restarts, including while services are running. If another process later occupies a saved port, startup fails; Flip does not move a running preview to another port or stop the other process. An unrelated process can still claim a port between allocation and startup. Startup checks and bind errors detect this race. Explicit conflicts with saved assignments fail with an error.
 
 Registrations and port assignments live in the OS user config directory under `flip/state.json`, or in `FLIP_HOME` when set. Updates use a process lock and replace the state file only after config validation succeeds. Deleted or prunable Git worktrees are skipped, and their saved assignments are dropped on the next discovery. Allocations belonging to deleted config files are reclaimed during allocation. A running supervisor keeps its startup snapshot, so stop it before removing worktrees or editing config, then restart it to discover additions. Keep `FLIP_HOME` stable across terminals and outside version control.
+## Named services and preview contract
+
+Each worktree may use `services: {"web": {...}, "api": {...}}` instead of legacy `ui`/`backend`. Mixing these forms in one worktree is rejected. Services retain `dir`, `command`, `port`, `health`, `env`, and `restart_on_use`. `type` defaults to `http`; named services default `restart_on_use` to false. Legacy `ui` and `backend` keep their existing defaults and routing.
+
+`routes` is a per-worktree array such as `[{"prefix":"/api","service":"api","strip_prefix":true},{"prefix":"/","service":"web"}]`. The longest matching path prefix wins at segment boundaries. Unmatched paths return 404. A single enabled HTTP service gets a `/` route when routes are omitted; several HTTP services require explicit routes. Routes can target only enabled HTTP services.
+
+A service with `type: "worker"` starts only with `enabled: true`. It runs in the foreground, has no port or HTTP health route, and is considered started after remaining alive for 500 ms. This detects immediate exits, not application readiness. Enabled HTTP services and workers must finish startup before selection or preview publication. HTTP readiness remains a 2xx/3xx health response. There is no dependency scheduler; startup uses sorted service names. Configure workers only when safe to run alongside other worktrees. `enabled: false` may also disable HTTP services.
+
+Example named-service worktree entry, with paths and commands adapted to your app:
+
+```json
+{
+  "preview_port": 8091,
+  "services": {
+    "web": {"dir": "../app", "command": ["node", "web.js"], "port": 8092, "env": {"PORT": "{port}"}},
+    "api": {"dir": "../app", "command": ["node", "api.js"], "port": 8093, "env": {"PORT": "{port}"}, "health": "/ready"},
+    "jobs": {"type": "worker", "enabled": true, "dir": "../app", "command": ["node", "worker.js"]}
+  },
+  "routes": [
+    {"prefix": "/api", "service": "api", "strip_prefix": true},
+    {"prefix": "/", "service": "web"}
+  ]
+}
+```
+
+Optional `preview_port` on a worktree reserves a unique loopback port when `serve` starts. After `up NAME` or successful `use NAME`, `http://localhost:PREVIEW_PORT` routes to that worktree regardless of the fixed preview selection. `down NAME` makes its preview unavailable. The fixed `port` and `use` behavior stay intact. Ports are explicit and globally unique within the config; automatic assignment is deferred to discovery.
+
+`restart NAME SERVICE` accepts any configured enabled service name. The existing control request shape, `{Action, Name, Part}`, is unchanged; `Part` is the service name. `status` lists each named service, process state, selection, and optional preview URL. Logs use `.flip/NAME-SERVICE.log`.
+
+Separate preview ports do not isolate sessions. Cookies are shared across ports on the same host, while browser origin storage normally differs by port. Apps may still share backends, credentials, and external state. OAuth providers must explicitly allow each callback URI used by a separate preview; an existing callback on the fixed preview continues to reach its selected worktree. Finish login before switching that preview.
 
 ## UI and Google login
 
@@ -128,18 +158,21 @@ Forwarded headers describe the public request. Flip preserves its Host header. C
 | `unregister NAME` | Removes a project name. |
 | `serve` | Starts the loopback proxy and control listener; no app starts automatically. |
 | `up NAME` | Starts missing services and waits for readiness. Does not select or restart healthy processes. |
+| `serve` | Binds the shared preview, configured worktree previews, and control listener. No app starts automatically. |
+| `up NAME` | Starts missing enabled services, waits for startup, and publishes its optional worktree preview. Keeps shared selection and running processes. |
 | `use NAME` | Starts configured services, restarts those with restart_on_use enabled, then selects the worktree. |
-| `restart NAME backend` | Restarts just the backend, retaining selection. `ui` also works. |
-| `down NAME` | Stops that worktree's owned services. Clears selection if active. |
-| `status` | Shows process state, PID and selected worktree. It is not a continuous health monitor. |
+| `restart NAME SERVICE` | Restarts one enabled named service, retaining selection. Legacy `ui` and `backend` still work. |
+| `down NAME` | Stops owned services and clears its preview. Clears shared selection if active. |
+| `status` | Lists each service, state, PID, selection and configured preview URL. It is not a continuous health monitor. |
 
-If a target fails to start, the previous selection remains. A UI that started successfully may stay running after a backend startup failure; `down` cleans it up. Restarting the selected backend creates a short outage. For services without automatic reload, edits require `restart` or another `use` with restart_on_use enabled.
+If a target fails to start, the previous selection remains. Services that started successfully may stay running after a later service fails; `down` cleans it up. Restarting the selected backend creates a short outage. For services without automatic reload, edits require `restart` or another `use` with restart_on_use enabled.
 
-Logs append to `.flip/NAME-ui.log` and `.flip/NAME-backend.log`. Ctrl+C in `serve` stops its owned service trees. Shutdown force-terminates services; it does not promise graceful completion of background jobs. Windows uses Job Objects; Unix uses process groups. Services must remain in the foreground and must not daemonize or escape their process group/job.
+Logs append to `.flip/NAME-SERVICE.log`, including worker output. Legacy names remain `.flip/NAME-ui.log` and `.flip/NAME-backend.log`. Ctrl+C in `serve` stops its owned service trees. Shutdown force-terminates services; it does not promise graceful completion of background jobs. Windows uses Job Objects; Unix uses process groups. Services must remain in the foreground and must not daemonize or escape their process group/job.
 
 ## Scope
 
 Flip uses one foreground supervisor per config. No background daemon installation, file watching, or database isolation.
+Flip uses explicit config and one foreground supervisor. No auto-discovery, automatic port allocation, background daemon installation, file watching, or database isolation.
 
 All browser tabs on 8080 share the selection. Refresh them after switching; existing requests and sockets are not migrated. Finish login and active operations before switching. Cookies, local storage, databases, queues and scheduled jobs are not isolated by worktrees. Separate their configuration when branches could conflict.
 
@@ -155,8 +188,11 @@ go vet ./...
 Discovery checks create five real Git worktrees, exercise concurrent processes, occupied ports, stable assignments, explicit overrides and stale registrations. For a live CLI check using only Git and Python, build a local binary and run `python test_discovery.py /path/to/flip`. It checks five fixed preview URLs, shared switching, supervisor restart and cleanup without using port 8080.
 
 Tests launch real child HTTP servers and check switching, backend restart, failed-start selection, port collisions, process cleanup, callback routing, API boundaries, prefix stripping, upgraded socket traffic and control authentication.
+Tests launch real HTTP servers and workers, verify named services, independent previews, disabled workers, immediate worker exits, config validation, and check switching, backend restart, failed-start selection, port collisions, process cleanup, callback routing, API boundaries, prefix stripping, upgraded socket traffic and control authentication.
 
-For the full installed-CLI check, run `py test_worktrees.py`. It requires Git, Node/npm, FastAPI and Uvicorn. It installs Vite in a temporary project, creates five real Git worktrees, runs ten servers, checks switching and a real HMR update, and stops its processes. The printed temporary directory retains the fixture, logs and `report.json`. It uses free ports so an existing preview on 8080 is left alone. This tests callback routing, not a real Google login.
+For the five-worktree CLI check, run `py test_worktrees.py`. Set `FLIP_BINARY` to an absolute worktree-local build path to test changes without replacing an installed binary. It requires Git, Node/npm, FastAPI and Uvicorn. It installs Vite in a temporary project, creates five real Git worktrees, runs ten servers, checks switching and a real HMR update, and stops its processes. The printed temporary directory retains the fixture, logs and `report.json`. It uses free ports so an existing preview on 8080 is left alone. This tests callback routing, not a real Google login.
+
+For named-service CLI coverage, run `python test_services.py PATH_TO_LOCAL_FLIP_BINARY`. It needs only Python, Git and the built binary. It creates two disposable Git worktrees, checks concurrent previews, workers, custom route/restart behavior and cleanup, then prints a retained report path.
 
 References: [Go reverse proxy](https://pkg.go.dev/net/http/httputil#ReverseProxy), [Windows Job Objects](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects), [Vite server options](https://vite.dev/config/server-options), [Google OAuth](https://developers.google.com/identity/protocols/oauth2/web-server).
 
@@ -171,16 +207,3 @@ Issues and pull requests are welcome. Include reproduction steps for bugs and ru
 ## License
 
 [MIT](LICENSE).
-## Named services and preview contract
-
-Each worktree may use `services: {"web": {...}, "api": {...}}` instead of legacy `ui`/`backend`. Mixing these forms in one worktree is rejected. Services retain `dir`, `command`, `port`, `health`, `env`, and `restart_on_use`. `type` defaults to `http`; named services default `restart_on_use` to false. Legacy `ui` and `backend` keep their existing defaults and routing.
-
-`routes` is a per-worktree array such as `[{"prefix":"/api","service":"api","strip_prefix":true},{"prefix":"/","service":"web"}]`. The longest matching path prefix wins at segment boundaries. Unmatched paths return 404. A single enabled HTTP service gets a `/` route when routes are omitted; several HTTP services require explicit routes. Routes can target only enabled HTTP services.
-
-A service with `type: "worker"` starts only with `enabled: true`. It runs in the foreground, has no port or HTTP health route, and is considered started after remaining alive for 500 ms. This detects immediate exits, not application readiness. Enabled HTTP services and workers must finish startup before selection or preview publication. HTTP readiness remains a 2xx/3xx health response. There is no dependency scheduler; startup uses sorted service names. Configure workers only when safe to run alongside other worktrees. `enabled: false` may also disable HTTP services.
-
-Optional `preview_port` on a worktree reserves a unique loopback port when `serve` starts. After `up NAME` or successful `use NAME`, `http://localhost:PREVIEW_PORT` routes to that worktree regardless of the fixed preview selection. `down NAME` makes its preview unavailable. The fixed `port` and `use` behavior stay intact. Ports are explicit and globally unique within the config; automatic assignment is deferred to discovery.
-
-`restart NAME SERVICE` accepts any configured enabled service name. The existing control request shape, `{Action, Name, Part}`, is unchanged; `Part` is the service name. `status` lists each named service, process state, selection, and optional preview URL. Logs use `.flip/NAME-SERVICE.log`.
-
-Separate preview ports do not isolate sessions. Cookies are shared across ports on the same host, while browser origin storage normally differs by port. Apps may still share backends, credentials, and external state. OAuth providers must explicitly allow each callback URI used by a separate preview; an existing callback on the fixed preview continues to reach its selected worktree. Finish login before switching that preview.
