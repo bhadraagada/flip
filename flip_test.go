@@ -34,7 +34,7 @@ func TestSingleServiceAndRestartPolicy(t *testing.T) {
 				w.Backend = s
 			}
 			// Validate through the public JSON configuration path as well as the manager.
-			c := config{Port: freePort(t), ControlPort: freePort(t), APIPrefix: "/api", TimeoutSeconds: 5, Worktrees: map[string]worktree{"one": w}}
+			c := config{Port: freePort(t), ControlPort: freePort(t), APIPrefix: "/api", StripPrefix: true, TimeoutSeconds: 5, Worktrees: map[string]worktree{"one": w}}
 			b, _ := json.Marshal(c)
 			path := filepath.Join(root, "flip.json")
 			os.WriteFile(path, b, 0600)
@@ -64,6 +64,14 @@ func TestSingleServiceAndRestartPolicy(t *testing.T) {
 				}
 				body, _ := io.ReadAll(resp.Body)
 				resp.Body.Close()
+				wantPath := path
+				if role == "backend" && path == "/api/value" {
+					wantPath = "/value"
+				}
+				if !strings.HasSuffix(string(body), ":"+wantPath) {
+					t.Fatal("legacy prefix behavior changed", string(body))
+				}
+
 				if !strings.HasPrefix(string(body), role+":") {
 					t.Fatal(string(body))
 				}
