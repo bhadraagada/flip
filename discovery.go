@@ -16,7 +16,7 @@ import (
 type discovery struct {
 	Repo     string             `json:"repo"`
 	Services map[string]service `json:"services"`
-	Routes   []route            `json:"routes,omitempty"`
+	Routes   []route            `json:"routes"`
 	Preview  bool               `json:"preview,omitempty"`
 	PortMin  int                `json:"port_min,omitempty"`
 	PortMax  int                `json:"port_max,omitempty"`
