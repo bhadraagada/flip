@@ -2,7 +2,7 @@
 
 One browser address for several running worktrees. Written in Go with no third-party dependencies.
 
-Flip owns `http://localhost:8080`. It forwards UI requests and hot-reload sockets to the selected Vite process, and `/api` requests to that worktree's backend. `flip use` always restarts the target backend before switching, so FastAPI can run without reload.
+Flip owns `http://localhost:8080`. It forwards HTTP and WebSocket traffic to the selected worktree's configured processes. Use any language or framework: a single web server, an API alone, or separate frontend and API servers. Each service controls whether switching restarts it.
 
 ## Start
 
@@ -48,13 +48,19 @@ On Linux/macOS, build with `go build -o flip .` and use `./flip`. Config lookup 
 
 - Paths are relative to the config file. Each service has its own working directory.
 - Commands are argument arrays, executed directly without a shell. `{port}` expands to that service's configured port. Use an explicit Python executable such as `.venv/Scripts/python.exe` when needed.
-- The Vite example invokes Node directly to work on Windows without `npm.cmd` shell quoting. You can explicitly use a shell in your command if your project requires one; only use trusted config files.
+- On Windows, invoke executables directly, such as Node with a JavaScript entrypoint. `npm.cmd` requires an explicit shell. You can explicitly use a shell in your command if your project requires one; only use trusted config files.
 - Ports must be unique. Configure servers to bind `127.0.0.1`; use Vite `--strictPort` so it cannot silently move to another port.
-- `health` is an HTTP route on the internal service. Flip waits for a 2xx or 3xx response; redirects are not followed. Prefer a dedicated unauthenticated readiness route that only succeeds after initialization. The example uses FastAPI's `/openapi.json`; change it if disabled.
+- `health` is an HTTP route on the internal service. Flip waits for a 2xx or 3xx response; redirects are not followed. Prefer a dedicated unauthenticated readiness route that only succeeds after initialization. The template uses `/`; change it to your service's readiness route.
 - Optional `env` is an object of per-service environment overrides. Flip also inherits the environment of `serve`. It does not parse `.env` files; your startup command or app must load them.
 - Config is read when `serve` starts. Stop and restart it after editing config. Keep the config unchanged while it runs.
 
-The example uses UI 8081 and backend 8101. For another worktree, use 8082 and 8102, or any other unused pair.
+The template uses a placeholder command, `your-dev-server`. Replace it with your actual executable and arguments. Flip does not install frameworks or infer their startup flags.
+
+`ui` and `backend` are routing roles, not technology choices. Configure either or both. With only `ui`, all paths go to it unchanged. With only `backend`, all paths go to it; `strip_api_prefix` still applies to matching API paths. With both, the API prefix routes to `backend` and other requests route to `ui`.
+
+Each service accepts `restart_on_use`. Set it to `false` for a server that already reloads edits, or `true` for a process that must restart or rebuild. Defaults preserve existing configurations: `false` for `ui`, `true` for `backend`. Explicit `restart` always restarts the requested service.
+
+For example, an existing Go HTTP application that reads `PORT` can use a backend service with `command: ["go", "run", "."]`, `env: {"PORT": "{port}"}`, and `restart_on_use: true`. A Node application can use `["node", "server.js"]` with the same environment convention. Use the flags or environment variables your own application actually supports.
 
 ## UI and Google login
 
@@ -72,12 +78,12 @@ Forwarded headers describe the public request. Flip preserves its Host header. C
 | --- | --- |
 | `serve` | Starts the loopback proxy and control listener; no app starts automatically. |
 | `up NAME` | Starts missing services and waits for readiness. Does not select or restart healthy processes. |
-| `use NAME` | Starts the UI if needed, restarts the backend, checks readiness, then switches both targets together. |
+| `use NAME` | Starts configured services, restarts those with restart_on_use enabled, then selects the worktree. |
 | `restart NAME backend` | Restarts just the backend, retaining selection. `ui` also works. |
 | `down NAME` | Stops that worktree's owned services. Clears selection if active. |
 | `status` | Shows process state, PID and selected worktree. It is not a continuous health monitor. |
 
-If a target fails to start, the previous selection remains. A UI that started successfully may stay running after a backend startup failure; `down` cleans it up. Restarting the selected backend creates a short outage. Saving Python after selection still requires `restart` or another `use`.
+If a target fails to start, the previous selection remains. A UI that started successfully may stay running after a backend startup failure; `down` cleans it up. Restarting the selected backend creates a short outage. For services without automatic reload, edits require `restart` or another `use` with restart_on_use enabled.
 
 Logs append to `.flip/NAME-ui.log` and `.flip/NAME-backend.log`. Ctrl+C in `serve` stops its owned service trees. Shutdown force-terminates services; it does not promise graceful completion of background jobs. Windows uses Job Objects; Unix uses process groups. Services must remain in the foreground and must not daemonize or escape their process group/job.
 

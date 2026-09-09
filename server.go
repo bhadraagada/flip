@@ -99,6 +99,9 @@ func (m *manager) command(action, name, part string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("unknown worktree %q", name)
 	}
+	if action == "restart" && ((part == "ui" && !w.UI.configured()) || (part == "backend" && !w.Backend.configured())) {
+		return "", fmt.Errorf("%s has no %s service", name, part)
+	}
 	p := m.processes[name]
 	if p == nil {
 		p = &pair{}
@@ -129,6 +132,9 @@ func (m *manager) command(action, name, part string) (string, error) {
 		return "", err
 	}
 	ensure := func(dst **process, s service, label string, restart bool) error {
+		if !s.configured() {
+			return nil
+		}
 		if restart || !(*dst).running() {
 			if err := (*dst).stop(); err != nil {
 				return err
@@ -145,24 +151,32 @@ func (m *manager) command(action, name, part string) (string, error) {
 		return nil
 	}
 	if action != "restart" || part == "ui" {
-		if err := ensure(&p.ui, w.UI, "ui", action == "restart"); err != nil {
+		if err := ensure(&p.ui, w.UI, "ui", action == "restart" || action == "use" && w.UI.restartOnUse(false)); err != nil {
 			return "", err
 		}
 	}
 	if action != "restart" || part == "backend" {
-		if err := ensure(&p.backend, w.Backend, "backend", action == "use" || action == "restart"); err != nil {
+		if err := ensure(&p.backend, w.Backend, "backend", action == "use" && w.Backend.restartOnUse(true) || action == "restart"); err != nil {
 			return "", err
 		}
 	}
 	if action == "use" {
-		if !p.ui.running() || !p.backend.running() {
+		if w.UI.configured() && !p.ui.running() || w.Backend.configured() && !p.backend.running() {
 			return "", fmt.Errorf("a service exited before selection; inspect logs")
 		}
 		strip := ""
 		if m.c.StripPrefix {
 			strip = m.c.APIPrefix
 		}
-		m.active.Store(&selection{name: name, ui: proxy(w.UI.Port, ""), backend: proxy(w.Backend.Port, strip)})
+		uiPort, backendPort := w.UI.Port, w.Backend.Port
+		if !w.UI.configured() {
+			uiPort = backendPort
+		}
+		if !w.Backend.configured() {
+			backendPort = uiPort
+			strip = ""
+		}
+		m.active.Store(&selection{name: name, ui: proxy(uiPort, ""), backend: proxy(backendPort, strip)})
 		return fmt.Sprintf("Selected %s at http://localhost:%d. Refresh your browser.\n", name, m.c.Port), nil
 	}
 	return name + " ready\n", nil

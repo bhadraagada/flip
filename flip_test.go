@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -17,6 +18,85 @@ import (
 	"testing"
 	"time"
 )
+
+func TestSingleServiceAndRestartPolicy(t *testing.T) {
+	for _, role := range []string{"ui", "backend"} {
+		t.Run(role, func(t *testing.T) {
+			root := t.TempDir()
+			exe, _ := os.Executable()
+			os.WriteFile(filepath.Join(root, "response.txt"), []byte(role), 0600)
+			no := false
+			s := service{Dir: root, Command: []string{exe, "-test.run=^TestHelperProcess$"}, Port: freePort(t), Health: "/health", RestartOnUse: &no, Env: map[string]string{"FLIP_TEST_HELPER": "1", "FLIP_TEST_PORT": "{port}"}}
+			w := worktree{}
+			if role == "ui" {
+				w.UI = s
+			} else {
+				w.Backend = s
+			}
+			// Validate through the public JSON configuration path as well as the manager.
+			c := config{Port: freePort(t), ControlPort: freePort(t), APIPrefix: "/api", TimeoutSeconds: 5, Worktrees: map[string]worktree{"one": w}}
+			b, _ := json.Marshal(c)
+			path := filepath.Join(root, "flip.json")
+			os.WriteFile(path, b, 0600)
+			c, err := readConfig(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			m := newManager(context.Background(), c)
+			defer m.close()
+			if _, err := m.command("use", "one", ""); err != nil {
+				t.Fatal(err)
+			}
+			proc := func() *process {
+				if role == "ui" {
+					return m.processes["one"].ui
+				}
+				return m.processes["one"].backend
+			}
+			old := proc().cmd.Process.Pid
+			if _, err := m.command("use", "one", ""); err != nil {
+				t.Fatal(err)
+			}
+			if proc().cmd.Process.Pid != old {
+				t.Fatal("restart_on_use false ignored")
+			}
+			front := httptest.NewServer(m)
+			defer front.Close()
+			for _, path := range []string{"/", "/api/value", "/callback"} {
+				resp, err := http.Get(front.URL + path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				body, _ := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				if !strings.HasPrefix(string(body), role+":") {
+					t.Fatal(string(body))
+				}
+			}
+			if _, err := m.command("restart", "one", role); err != nil {
+				t.Fatal(err)
+			}
+			if proc().cmd.Process.Pid == old {
+				t.Fatal("explicit restart skipped")
+			}
+			yes := true
+			w = m.c.Worktrees["one"]
+			if role == "ui" {
+				w.UI.RestartOnUse = &yes
+			} else {
+				w.Backend.RestartOnUse = &yes
+			}
+			m.c.Worktrees["one"] = w
+			old = proc().cmd.Process.Pid
+			if _, err := m.command("use", "one", ""); err != nil {
+				t.Fatal(err)
+			}
+			if proc().cmd.Process.Pid == old {
+				t.Fatal("restart_on_use true ignored")
+			}
+		})
+	}
+}
 
 func TestShorthand(t *testing.T) {
 	for _, tc := range []struct{ in, want []string }{

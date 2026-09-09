@@ -10,12 +10,22 @@ import (
 )
 
 type service struct {
-	Dir     string            `json:"dir"`
-	Command []string          `json:"command"`
-	Port    int               `json:"port"`
-	Health  string            `json:"health"`
-	Env     map[string]string `json:"env,omitempty"`
+	Dir          string            `json:"dir"`
+	Command      []string          `json:"command"`
+	Port         int               `json:"port"`
+	Health       string            `json:"health"`
+	Env          map[string]string `json:"env,omitempty"`
+	RestartOnUse *bool             `json:"restart_on_use,omitempty"`
 }
+
+func (s service) configured() bool { return len(s.Command) > 0 }
+func (s service) restartOnUse(fallback bool) bool {
+	if s.RestartOnUse != nil {
+		return *s.RestartOnUse
+	}
+	return fallback
+}
+
 type worktree struct {
 	UI      service `json:"ui"`
 	Backend service `json:"backend"`
@@ -75,7 +85,16 @@ func readConfig(path string) (config, error) {
 		if !namePattern.MatchString(name) {
 			return c, fmt.Errorf("invalid worktree name %q", name)
 		}
+		if !w.UI.configured() && !w.Backend.configured() {
+			return c, fmt.Errorf("%s: configure at least one ui or backend command", name)
+		}
 		for _, s := range []*service{&w.UI, &w.Backend} {
+			if !s.configured() {
+				if s.Port != 0 || s.Dir != "" || s.Health != "" || len(s.Env) > 0 || s.RestartOnUse != nil {
+					return c, fmt.Errorf("%s: service command is required", name)
+				}
+				continue
+			}
 			if err = checkPort(s.Port); err != nil {
 				return c, fmt.Errorf("%s: %w", name, err)
 			}
@@ -113,16 +132,11 @@ const example = `{
   "worktrees": {
     "main": {
       "ui": {
-        "dir": "../my-app/frontend",
-        "command": ["node", "node_modules/vite/bin/vite.js", "--host", "127.0.0.1", "--port", "{port}", "--strictPort"],
+        "dir": "../my-app",
+        "command": ["your-dev-server", "--port", "{port}"],
         "port": 8081,
-        "health": "/"
-      },
-      "backend": {
-        "dir": "../my-app/backend",
-        "command": ["python", "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "{port}"],
-        "port": 8101,
-        "health": "/openapi.json"
+        "health": "/",
+        "restart_on_use": false
       }
     }
   }

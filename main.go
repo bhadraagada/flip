@@ -26,7 +26,7 @@ func run(args []string) error {
 	}
 	path := f.String("config", defaultConfig, "configuration file; defaults to FLIP_CONFIG or flip.json")
 	f.Usage = func() {
-		fmt.Println("Flip — one address, several worktrees.\n\nflip [-config path] <name>\nflip [-config path] init|serve|status\nflip [-config path] up|use|down <name>\nflip [-config path] restart <name> backend|ui\n\nflip <name> is shorthand for flip use <name>. Both restart the backend.\nConfig: -config, then FLIP_CONFIG, then flip.json in the current directory.")
+		fmt.Println("Flip — one address, several worktrees.\n\nflip [-config path] <name>\nflip [-config path] init|serve|status\nflip [-config path] up|use|down <name>\nflip [-config path] restart <name> backend|ui\n\nflip <name> is shorthand for flip use <name>. Services follow restart_on_use.\nConfig: -config, then FLIP_CONFIG, then flip.json in the current directory.")
 	}
 	if err := f.Parse(args); err != nil {
 		if err == flag.ErrHelp {
