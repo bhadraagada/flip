@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"sync"
 	"syscall"
@@ -13,6 +14,21 @@ var kernel = syscall.NewLazyDLL("kernel32.dll")
 var createJob = kernel.NewProc("CreateJobObjectW")
 var setJob = kernel.NewProc("SetInformationJobObject")
 var assignJob = kernel.NewProc("AssignProcessToJobObject")
+
+func detach(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x00000008 | 0x00000200} // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+}
+
+func lockFile(f *os.File) error {
+	var overlapped syscall.Overlapped
+	ok, _, err := kernel.NewProc("LockFileEx").Call(f.Fd(), 0x3, 0, 1, 0, uintptr(unsafe.Pointer(&overlapped)))
+	if ok == 0 {
+		return err
+	}
+	return nil
+}
+
+func stopSignals() []os.Signal { return []os.Signal{os.Interrupt} }
 
 type jobLimits struct {
 	ProcessTime, JobTime                                       int64

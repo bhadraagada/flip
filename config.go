@@ -31,13 +31,15 @@ type worktree struct {
 	Backend service `json:"backend"`
 }
 type config struct {
-	Port           int                 `json:"port"`
-	ControlPort    int                 `json:"control_port"`
-	APIPrefix      string              `json:"api_prefix"`
-	StripPrefix    bool                `json:"strip_api_prefix"`
-	TimeoutSeconds int                 `json:"timeout_seconds"`
-	Worktrees      map[string]worktree `json:"worktrees"`
-	root           string
+	Port               int                 `json:"port"`
+	ControlPort        int                 `json:"control_port"`
+	APIPrefix          string              `json:"api_prefix"`
+	StripPrefix        bool                `json:"strip_api_prefix"`
+	TimeoutSeconds     int                 `json:"timeout_seconds"`
+	IdleTimeoutSeconds int                 `json:"idle_timeout_seconds,omitempty"`
+	Worktrees          map[string]worktree `json:"worktrees"`
+	root               string
+	path               string
 }
 
 func readConfig(path string) (config, error) {
@@ -55,6 +57,13 @@ func readConfig(path string) (config, error) {
 	c.root, err = filepath.Abs(filepath.Dir(path))
 	if err != nil {
 		return c, err
+	}
+	c.path, err = filepath.Abs(path)
+	if err != nil {
+		return c, err
+	}
+	if c.IdleTimeoutSeconds < 0 {
+		return c, fmt.Errorf("idle_timeout_seconds must be nonnegative")
 	}
 	ports := map[int]bool{}
 	checkPort := func(p int) error {

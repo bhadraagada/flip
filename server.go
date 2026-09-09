@@ -32,10 +32,16 @@ type manager struct {
 	processes map[string]*pair
 	active    atomic.Pointer[selection]
 	ctx       context.Context
+	cancel    context.CancelFunc
+	activity  map[string]*activity
 }
 
 func newManager(ctx context.Context, c config) *manager {
-	return &manager{c: c, ctx: ctx, processes: map[string]*pair{}}
+	m := &manager{c: c, ctx: ctx, processes: map[string]*pair{}, activity: map[string]*activity{}}
+	for name := range c.Worktrees {
+		m.activity[name] = &activity{}
+	}
+	return m
 }
 func proxy(port int, strip string) *httputil.ReverseProxy {
 	target := &url.URL{Scheme: "http", Host: address(port)}
@@ -68,6 +74,12 @@ func (m *manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "No worktree selected. Run flip use <name>.", 503)
 		return
 	}
+	activity := m.activity[a.name]
+	if !activity.begin() {
+		http.Error(w, "Worktree stopped. Run flip use <name>.", 503)
+		return
+	}
+	defer activity.end() // ReverseProxy returns only after streams and upgraded sockets close.
 	p := a.ui
 	if r.URL.Path == m.c.APIPrefix || strings.HasPrefix(r.URL.Path, m.c.APIPrefix+"/") {
 		p = a.backend
@@ -108,18 +120,9 @@ func (m *manager) command(action, name, part string) (string, error) {
 		m.processes[name] = p
 	}
 	if action == "down" {
-		if a := m.active.Load(); a != nil && a.name == name {
-			m.active.Store(nil)
+		if err := m.stopWorktree(name); err != nil {
+			return "", err
 		}
-		e1, e2 := p.ui.stop(), p.backend.stop()
-		if e1 != nil {
-			return "", e1
-		}
-		if e2 != nil {
-			return "", e2
-		}
-		p.ui = nil
-		p.backend = nil
 		return name + " stopped\n", nil
 	}
 	if action != "up" && action != "use" && action != "restart" {
@@ -128,6 +131,7 @@ func (m *manager) command(action, name, part string) (string, error) {
 	if action == "restart" && part != "backend" && part != "ui" {
 		return "", fmt.Errorf("restart requires backend or ui")
 	}
+	defer m.activity[name].touch()
 	if err := os.MkdirAll(filepath.Join(m.c.root, ".flip"), 0700); err != nil {
 		return "", err
 	}
@@ -199,6 +203,30 @@ func (m *manager) close() {
 	}
 }
 
+// Caller holds the lifecycle lock. Idle expiry marks activity stopped before entry.
+func (m *manager) stopWorktree(name string) error {
+	activity := m.activity[name]
+	activity.mu.Lock()
+	activity.stopped = true
+	activity.mu.Unlock()
+	if a := m.active.Load(); a != nil && a.name == name {
+		m.active.Store(nil)
+	}
+	p := m.processes[name]
+	if p == nil {
+		return nil
+	}
+	e1, e2 := p.ui.stop(), p.backend.stop()
+	if e1 != nil {
+		return e1
+	}
+	if e2 != nil {
+		return e2
+	}
+	p.ui, p.backend = nil, nil
+	return nil
+}
+
 func control(m *manager, token string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" || r.Header.Get("Origin") != "" || subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+token)) != 1 {
@@ -212,6 +240,16 @@ func control(m *manager, token string) http.Handler {
 			http.Error(w, "invalid request", 400)
 			return
 		}
+		if req.Action == "supervisor-status" {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(supervisorInfo{PID: os.Getpid(), Config: m.c.path})
+			return
+		}
+		if req.Action == "supervisor-stop" && m.cancel != nil {
+			fmt.Fprintln(w, "Stopping supervisor")
+			m.cancel()
+			return
+		}
 		out, err := m.command(req.Action, req.Name, req.Part)
 		if err != nil {
 			http.Error(w, err.Error(), 400)
@@ -221,6 +259,11 @@ func control(m *manager, token string) http.Handler {
 	})
 }
 func serve(c config) error {
+	lock, err := acquireLock(c, "supervisor")
+	if err != nil {
+		return fmt.Errorf("supervisor already running or lock unavailable: %w", err)
+	}
+	defer lock.Close()
 	// Bind both listeners before touching the control token; another instance wins cleanly.
 	admin, err := net.Listen("tcp", address(c.ControlPort))
 	if err != nil {
@@ -246,17 +289,26 @@ func serve(c config) error {
 		return err
 	}
 	defer os.Remove(tokenPath)
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := signal.NotifyContext(context.Background(), stopSignals()...)
 	defer cancel()
 	m := newManager(ctx, c)
+	m.cancel = cancel
 	defer m.close()
 	front := &http.Server{Handler: m, ReadHeaderTimeout: 5 * time.Second}
 	api := &http.Server{Handler: control(m, token), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second}
 	defer front.Close()
-	defer api.Close()
+	defer func() {
+		cancel()
+		ctx, cancelShutdown := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancelShutdown()
+		if err := api.Shutdown(ctx); err != nil {
+			api.Close()
+		}
+	}()
 	errs := make(chan error, 2)
 	go func() { errs <- front.Serve(public) }()
 	go func() { errs <- api.Serve(admin) }()
+	go m.idleLoop()
 	fmt.Printf("Flip listening at http://localhost:%d. Use another terminal for flip commands. Ctrl+C stops owned services.\n", c.Port)
 	select {
 	case <-ctx.Done():

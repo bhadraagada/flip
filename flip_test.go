@@ -131,6 +131,23 @@ func TestHelperProcess(t *testing.T) {
 		os.Exit(3)
 	}
 	err = http.ListenAndServe(address(port), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/stream" {
+			w.WriteHeader(200)
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+			return
+		}
+		if r.Header.Get("Upgrade") == "websocket" {
+			conn, rw, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+			rw.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n")
+			rw.Flush()
+			io.Copy(conn, rw)
+			return
+		}
 		if r.URL.Path == "/notready" {
 			w.WriteHeader(503)
 			return
