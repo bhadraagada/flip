@@ -162,10 +162,23 @@ func resolveConfig(explicit, project string) (string, error) {
 		err = withStateMode(func(s *savedState) error {
 			seen := map[string]bool{}
 			for _, path := range s.Projects {
-				if _, e := os.Stat(path); e != nil {
+				data, e := os.ReadFile(path)
+				if e != nil {
 					continue
 				}
-				root, e := gitCommon(filepath.Dir(path))
+				var c config
+				if json.Unmarshal(data, &c) != nil {
+					continue
+				}
+				repo := filepath.Dir(path)
+				if c.Discover != nil {
+					if filepath.IsAbs(c.Discover.Repo) {
+						repo = c.Discover.Repo
+					} else {
+						repo = filepath.Join(repo, c.Discover.Repo)
+					}
+				}
+				root, e := gitCommon(repo)
 				if e == nil && root == common && !seen[path] {
 					matches = append(matches, path)
 					seen[path] = true

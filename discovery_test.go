@@ -160,6 +160,19 @@ func TestDiscoveryFiveWorktrees(t *testing.T) {
 	if err := run([]string{"unregister", "fixture"}); err != nil {
 		t.Fatal(err)
 	}
+	// A config stored outside the repository still identifies it through discover.repo.
+	outside := filepath.Join(root, "outside.json")
+	c.Discover.Repo = paths[0]
+	writeDiscoveryConfig(t, outside, c)
+	if err := run([]string{"-config", outside, "register", "external"}); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(paths[4])
+	resolved, err = resolveConfig("", "")
+	want, _ := canonicalPath(outside)
+	if err != nil || resolved != want {
+		t.Fatal("external registered config", resolved, err)
+	}
 }
 
 // Separate processes exercise the OS lock, rather than a goroutine-only mutex.
@@ -217,6 +230,28 @@ func TestConcurrentDiscoveryAndOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Replace a checkout while the configured range contains only the original assignments.
+	c.Discover.PortMax = 0
+	for _, w := range loaded.Worktrees {
+		for _, p := range []int{w.PreviewPort, w.Services["web"].Port} {
+			if p > c.Discover.PortMax {
+				c.Discover.PortMax = p
+			}
+		}
+	}
+	writeDiscoveryConfig(t, file, c)
+	if err := os.RemoveAll(paths[1]); err != nil {
+		t.Fatal(err)
+	}
+	replacement := filepath.Join(root, "replacement")
+	if out, err := exec.Command("git", "-C", paths[0], "worktree", "add", "--detach", replacement).CombinedOutput(); err != nil {
+		t.Fatal(err, string(out))
+	}
+	loaded, err = readConfig(file)
+	if err != nil || len(loaded.Worktrees) != 2 {
+		t.Fatal("stale assignments exhausted range", err)
+	}
+	paths[1] = replacement
 	// A fixed override replaces one generated worktree without changing its explicit port.
 	w := loaded.Worktrees["repo"]
 	c.Worktrees = map[string]worktree{"repo": w}
@@ -244,6 +279,15 @@ func TestConcurrentDiscoveryAndOverrides(t *testing.T) {
 	after, _ := os.ReadFile(statePath)
 	if string(before) != string(after) {
 		t.Fatal("invalid config changed saved state")
+	}
+	c.TimeoutSeconds = 5
+	c.Worktrees = nil
+	c.Discover.Preview = false
+	c.Discover.Routes = []route{}
+	writeDiscoveryConfig(t, file, c)
+	loaded, err = readConfig(file)
+	if err != nil || len(loaded.Worktrees["repo"].Routes) != 0 {
+		t.Fatal("explicit empty template routes were replaced", err)
 	}
 }
 

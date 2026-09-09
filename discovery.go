@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -151,10 +152,24 @@ func expandDiscovery(c *config, state *savedState, allocate bool) error {
 		used[port] = key
 		next[key] = port
 	}
-	// Reserve all old assignments before new allocation; adding an earlier name cannot steal a saved port.
+	// Reserve surviving assignments first. Removed worktrees must not exhaust a full range.
 	old := state.Ports[c.path]
+	wanted := map[string]bool{}
+	for _, path := range paths {
+		if _, explicit := c.Worktrees[names[path]]; explicit {
+			continue
+		}
+		for label, s := range d.Services {
+			if s.Type != "worker" {
+				wanted["auto/"+path+"/service/"+label] = true
+			}
+		}
+		if d.Preview {
+			wanted["auto/"+path+"/preview"] = true
+		}
+	}
 	for key, port := range old {
-		if strings.HasPrefix(key, "auto/") && used[port] == "" {
+		if wanted[key] && used[port] == "" {
 			used[port] = "saved assignment"
 		}
 	}
@@ -202,7 +217,7 @@ func expandDiscovery(c *config, state *savedState, allocate bool) error {
 		if _, explicit := c.Worktrees[name]; explicit {
 			continue
 		}
-		w := worktree{Services: map[string]service{}, Routes: append([]route(nil), d.Routes...)}
+		w := worktree{Services: map[string]service{}, Routes: slices.Clone(d.Routes)}
 		labels := make([]string, 0, len(d.Services))
 		for label := range d.Services {
 			labels = append(labels, label)
