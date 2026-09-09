@@ -58,7 +58,9 @@ type config struct {
 	StripPrefix    bool                `json:"strip_api_prefix"`
 	TimeoutSeconds int                 `json:"timeout_seconds"`
 	Worktrees      map[string]worktree `json:"worktrees"`
+	Discover       *discovery          `json:"discover,omitempty"`
 	root           string
+	path           string
 }
 
 // normalizeLegacy is the only place that assigns meaning to ui/backend roles.
@@ -108,6 +110,10 @@ func serviceNames(w worktree) []string {
 }
 
 func readConfig(path string) (config, error) {
+	return readConfigMode(path, true)
+}
+
+func readConfigMode(path string, allocate bool) (config, error) {
 	c := config{Port: 8080, ControlPort: 18080, APIPrefix: "/api", TimeoutSeconds: 30}
 	f, err := os.Open(path)
 	if err != nil {
@@ -119,10 +125,26 @@ func readConfig(path string) (config, error) {
 	if err = d.Decode(&c); err != nil {
 		return c, err
 	}
-	c.root, err = filepath.Abs(filepath.Dir(path))
+	c.path, err = canonicalPath(path)
 	if err != nil {
 		return c, err
 	}
+	c.root = filepath.Dir(c.path)
+	if c.Discover == nil {
+		return validateConfig(c)
+	}
+	err = withStateMode(func(state *savedState) error {
+		if err := expandDiscovery(&c, state, allocate); err != nil {
+			return err
+		}
+		c, err = validateConfig(c)
+		return err
+	}, allocate)
+	return c, err
+}
+
+func validateConfig(c config) (config, error) {
+	var err error
 	ports := map[int]bool{}
 	checkPort := func(p int) error {
 		if p < 1 || p > 65535 || ports[p] {
