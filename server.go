@@ -187,6 +187,9 @@ func (m *manager) command(action, name, part string) (string, error) {
 			return fmt.Sprintf("Selected %s at http://localhost:%d. Refresh your browser.\n", name, m.c.Port), nil
 		}
 	}
+	if action == "restart" {
+		return fmt.Sprintf("%s/%s restarted\n", name, part), nil
+	}
 	if wt.PreviewPort != 0 {
 		return fmt.Sprintf("%s ready at http://localhost:%d\n", name, wt.PreviewPort), nil
 	}
