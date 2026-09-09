@@ -46,7 +46,10 @@ $('refresh').onclick = () => update();
 async function login() {
   const grant = location.hash.slice(1); history.replaceState(null,'',location.pathname);
   try {
-    if (grant) { session = ''; sessionStorage.removeItem('flip-picker'); session = (await request('/picker/session',{Grant:grant})).session; sessionStorage.setItem('flip-picker',session); }
+    if (grant) {
+      session = ''; sessionStorage.removeItem('flip-picker'); document.querySelectorAll('button').forEach(b => b.disabled = true);
+      session = (await request('/picker/session',{Grant:grant})).session; sessionStorage.setItem('flip-picker',session);
+    }
     if (session) await update();
   } catch (error) { message(error.message.trim(),true); }
 }
