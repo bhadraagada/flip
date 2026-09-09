@@ -1,0 +1,352 @@
+package main
+
+import (
+	"bufio"
+	"context"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"reflect"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestShorthand(t *testing.T) {
+	for _, tc := range []struct{ in, want []string }{
+		{[]string{"feature-a"}, []string{"use", "feature-a"}},
+		{[]string{"status"}, []string{"status"}},
+		{[]string{"use", "status"}, []string{"use", "status"}},
+		{[]string{"restart", "a", "backend"}, []string{"restart", "a", "backend"}},
+	} {
+		got, err := normalizeCommand(tc.in)
+		if err != nil || !reflect.DeepEqual(got, tc.want) {
+			t.Fatal(got, err)
+		}
+	}
+	for _, args := range [][]string{nil, {"up"}, {"typo", "a"}, {"a", "b"}} {
+		if _, err := normalizeCommand(args); err == nil {
+			t.Fatal("accepted", args)
+		}
+	}
+}
+
+// Run the test binary as a real child server so lifecycle checks need no Python or Node.
+func TestHelperProcess(t *testing.T) {
+	if os.Getenv("FLIP_TEST_HELPER") != "1" {
+		return
+	}
+	if os.Getenv("FLIP_TEST_FAIL") == "1" {
+		os.Exit(2)
+	}
+	port, _ := strconv.Atoi(os.Getenv("FLIP_TEST_PORT"))
+	data, err := os.ReadFile("response.txt")
+	if err != nil {
+		os.Exit(3)
+	}
+	err = http.ListenAndServe(address(port), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/notready" {
+			w.WriteHeader(503)
+			return
+		}
+		if r.URL.Path == "/health" {
+			w.WriteHeader(204)
+			return
+		}
+		if r.URL.Path == "/spawn" {
+			cmd := exec.Command(os.Args[0], "-test.run=^TestHelperProcess$")
+			cmd.Env = append(os.Environ(), "FLIP_TEST_PORT="+r.URL.Query().Get("port"))
+			if err := cmd.Start(); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			go cmd.Wait()
+			w.WriteHeader(204)
+			return
+		}
+		fmt.Fprintf(w, "%s:%d:%s", data, os.Getpid(), r.URL.Path)
+	}))
+	fmt.Fprintln(os.Stderr, err)
+	os.Exit(1)
+}
+func freePort(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port
+}
+func TestLifecycleAndRouting(t *testing.T) {
+	root := t.TempDir()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	used := map[int]bool{}
+	newService := func(label string) service {
+		dir := filepath.Join(root, label)
+		if err := os.Mkdir(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "response.txt"), []byte(label), 0600); err != nil {
+			t.Fatal(err)
+		}
+		port := freePort(t)
+		for used[port] {
+			port = freePort(t)
+		}
+		used[port] = true
+		return service{Dir: dir, Command: []string{exe, "-test.run=^TestHelperProcess$"}, Port: port, Health: "/health", Env: map[string]string{"FLIP_TEST_HELPER": "1", "FLIP_TEST_PORT": "{port}"}}
+	}
+	c := config{root: root, APIPrefix: "/api", TimeoutSeconds: 5, Worktrees: map[string]worktree{
+		"a": {UI: newService("a-ui"), Backend: newService("a-backend")},
+		"b": {UI: newService("b-ui"), Backend: newService("b-backend")},
+	}}
+	m := newManager(context.Background(), c)
+	defer m.close()
+	front := httptest.NewServer(m)
+	defer front.Close()
+	get := func(path string) (int, string) {
+		t.Helper()
+		resp, err := http.Get(front.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.StatusCode, string(b)
+	}
+	command := func(a, n, p string) {
+		t.Helper()
+		if _, err := m.command(a, n, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if status, _ := get("/"); status != 503 {
+		t.Fatalf("unselected status %d", status)
+	}
+	command("up", "a", "")
+	old := m.processes["a"].backend.cmd.Process.Pid
+	command("up", "a", "")
+	if old != m.processes["a"].backend.cmd.Process.Pid {
+		t.Fatal("up restarted running process")
+	}
+	command("use", "a", "")
+	if old == m.processes["a"].backend.cmd.Process.Pid {
+		t.Fatal("use did not restart backend")
+	}
+	for path, want := range map[string]string{"/": "a-ui:", "/oauth/callback": "a-ui:", "/api/items": "a-backend:", "/apiculture": "a-ui:"} {
+		if _, body := get(path); !strings.HasPrefix(body, want) {
+			t.Fatalf("%s: %s", path, body)
+		}
+	}
+	command("use", "b", "")
+	if _, body := get("/api"); !strings.HasPrefix(body, "b-backend:") {
+		t.Fatal(body)
+	}
+	if !m.processes["a"].backend.running() {
+		t.Fatal("switch stopped unrelated backend")
+	}
+	old = m.processes["b"].backend.cmd.Process.Pid
+	if err := os.WriteFile(filepath.Join(c.Worktrees["b"].Backend.Dir, "response.txt"), []byte("edited"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, body := get("/api"); !strings.HasPrefix(body, "b-backend:") {
+		t.Fatal("running code unexpectedly reloaded", body)
+	}
+	command("restart", "b", "backend")
+	if old == m.processes["b"].backend.cmd.Process.Pid {
+		t.Fatal("restart kept PID")
+	}
+	if _, body := get("/api"); !strings.HasPrefix(body, "edited:") {
+		t.Fatal("restart did not load edited code", body)
+	}
+	w := m.c.Worktrees["a"]
+	w.Backend.Env["FLIP_TEST_FAIL"] = "1"
+	m.c.Worktrees["a"] = w
+	if _, err := m.command("use", "a", ""); err == nil {
+		t.Fatal("failed startup succeeded")
+	}
+	if m.active.Load().name != "b" {
+		t.Fatal("failed startup changed selection")
+	}
+	command("down", "b", "")
+	if status, _ := get("/"); status != 503 {
+		t.Fatal(status)
+	}
+	m.close()
+	for _, w := range c.Worktrees {
+		for _, s := range []service{w.UI, w.Backend} {
+			l, e := net.Listen("tcp", address(s.Port))
+			if e != nil {
+				t.Errorf("port still occupied: %v", e)
+			} else {
+				l.Close()
+			}
+		}
+	}
+}
+
+func TestDescendantCleanupAndReadinessTimeout(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "response.txt"), []byte("child"), 0600)
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := service{Dir: dir, Command: []string{exe, "-test.run=^TestHelperProcess$"}, Port: freePort(t), Health: "/health", Env: map[string]string{"FLIP_TEST_HELPER": "1", "FLIP_TEST_PORT": "{port}"}}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	p, err := start(ctx, s, filepath.Join(dir, "log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.stop()
+	childPort := freePort(t)
+	resp, err := http.Get(fmt.Sprintf("http://%s/spawn?port=%d", address(s.Port), childPort))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 204 {
+		t.Fatal(resp.StatusCode)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		conn, e := net.DialTimeout("tcp", address(childPort), 100*time.Millisecond)
+		if e == nil {
+			conn.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("child never started")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err := p.stop(); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(3 * time.Second)
+	for {
+		l, e := net.Listen("tcp", address(childPort))
+		if e == nil {
+			l.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("child survived stop")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	s.Health = "/notready"
+	cancelled, stop := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer stop()
+	if _, err := start(cancelled, s, filepath.Join(dir, "timeout.log")); err == nil {
+		t.Fatal("cancelled startup succeeded")
+	}
+	l, err := net.Listen("tcp", address(s.Port))
+	if err != nil {
+		t.Fatal("cancelled process retained port", err)
+	}
+	l.Close()
+}
+func TestControlAuthentication(t *testing.T) {
+	m := newManager(context.Background(), config{})
+	for _, tc := range []struct {
+		method, token, origin string
+		want                  int
+	}{{"POST", "", "", 403}, {"POST", "Bearer secret", "https://evil.example", 403}, {"GET", "Bearer secret", "", 403}, {"POST", "Bearer secret", "", 200}} {
+		r := httptest.NewRequest(tc.method, "http://localhost", strings.NewReader(`{"Action":"status"}`))
+		r.Header.Set("Authorization", tc.token)
+		r.Header.Set("Origin", tc.origin)
+		w := httptest.NewRecorder()
+		control(m, "secret").ServeHTTP(w, r)
+		if w.Code != tc.want {
+			t.Fatal(w.Code, tc)
+		}
+	}
+}
+func TestProxyUpgradeAndPrefix(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Upgrade") == "websocket" {
+			conn, rw, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+			rw.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n")
+			rw.Flush()
+			buf := make([]byte, 4)
+			io.ReadFull(rw, buf)
+			rw.Write(buf)
+			rw.Flush()
+			return
+		}
+		fmt.Fprint(w, r.URL.RequestURI())
+	}))
+	defer up.Close()
+	_, p, _ := net.SplitHostPort(strings.TrimPrefix(up.URL, "http://"))
+	port, _ := strconv.Atoi(p)
+	front := httptest.NewServer(proxy(port, "/api"))
+	defer front.Close()
+	resp, err := http.Get(front.URL + "/api/items?q=hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if string(data) != "/items?q=hello" {
+		t.Fatal(string(data))
+	}
+	conn, err := net.Dial("tcp", strings.TrimPrefix(front.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	fmt.Fprint(conn, "GET /socket HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n")
+	r := bufio.NewReader(conn)
+	response, err := http.ReadResponse(r, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != 101 {
+		t.Fatal(response.StatusCode)
+	}
+	fmt.Fprint(conn, "ping")
+	b := make([]byte, 4)
+	if _, err := io.ReadFull(r, b); err != nil || string(b) != "ping" {
+		t.Fatal(string(b), err)
+	}
+}
+func TestConfigAndPortCollision(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "flip.json")
+	if err := run([]string{"-config", file, "init"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"-config", file, "init"}); err == nil {
+		t.Fatal("init overwrote config")
+	}
+	if _, err := readConfig(file); err == nil {
+		t.Fatal("example missing directory accepted")
+	}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	if _, err := start(context.Background(), service{Port: l.Addr().(*net.TCPAddr).Port}, filepath.Join(dir, "log")); err == nil {
+		t.Fatal("occupied port accepted")
+	}
+}
