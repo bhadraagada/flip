@@ -34,7 +34,7 @@ func TestSingleServiceAndRestartPolicy(t *testing.T) {
 				w.Backend = s
 			}
 			// Validate through the public JSON configuration path as well as the manager.
-			c := config{Port: freePort(t), ControlPort: freePort(t), APIPrefix: "/api", TimeoutSeconds: 5, Worktrees: map[string]worktree{"one": w}}
+			c := config{Port: freePort(t), ControlPort: freePort(t), APIPrefix: "/api", StripPrefix: true, TimeoutSeconds: 5, Worktrees: map[string]worktree{"one": w}}
 			b, _ := json.Marshal(c)
 			path := filepath.Join(root, "flip.json")
 			os.WriteFile(path, b, 0600)
@@ -47,12 +47,7 @@ func TestSingleServiceAndRestartPolicy(t *testing.T) {
 			if _, err := m.command("use", "one", ""); err != nil {
 				t.Fatal(err)
 			}
-			proc := func() *process {
-				if role == "ui" {
-					return m.processes["one"].ui
-				}
-				return m.processes["one"].backend
-			}
+			proc := func() *process { return m.processes["one"][role] }
 			old := proc().cmd.Process.Pid
 			if _, err := m.command("use", "one", ""); err != nil {
 				t.Fatal(err)
@@ -69,6 +64,14 @@ func TestSingleServiceAndRestartPolicy(t *testing.T) {
 				}
 				body, _ := io.ReadAll(resp.Body)
 				resp.Body.Close()
+				wantPath := path
+				if role == "backend" && path == "/api/value" {
+					wantPath = "/value"
+				}
+				if !strings.HasSuffix(string(body), ":"+wantPath) {
+					t.Fatal("legacy prefix behavior changed", string(body))
+				}
+
 				if !strings.HasPrefix(string(body), role+":") {
 					t.Fatal(string(body))
 				}
@@ -81,11 +84,9 @@ func TestSingleServiceAndRestartPolicy(t *testing.T) {
 			}
 			yes := true
 			w = m.c.Worktrees["one"]
-			if role == "ui" {
-				w.UI.RestartOnUse = &yes
-			} else {
-				w.Backend.RestartOnUse = &yes
-			}
+			changed := w.Services[role]
+			changed.RestartOnUse = &yes
+			w.Services[role] = changed
 			m.c.Worktrees["one"] = w
 			old = proc().cmd.Process.Pid
 			if _, err := m.command("use", "one", ""); err != nil {
@@ -124,6 +125,11 @@ func TestHelperProcess(t *testing.T) {
 	}
 	if os.Getenv("FLIP_TEST_FAIL") == "1" {
 		os.Exit(2)
+	}
+	if os.Getenv("FLIP_TEST_WORKER") == "1" {
+		for {
+			time.Sleep(time.Second)
+		}
 	}
 	port, _ := strconv.Atoi(os.Getenv("FLIP_TEST_PORT"))
 	data, err := os.ReadFile("response.txt")
@@ -186,10 +192,11 @@ func TestLifecycleAndRouting(t *testing.T) {
 		used[port] = true
 		return service{Dir: dir, Command: []string{exe, "-test.run=^TestHelperProcess$"}, Port: port, Health: "/health", Env: map[string]string{"FLIP_TEST_HELPER": "1", "FLIP_TEST_PORT": "{port}"}}
 	}
-	c := config{root: root, APIPrefix: "/api", TimeoutSeconds: 5, Worktrees: map[string]worktree{
+	c := config{Port: freePort(t), ControlPort: freePort(t), root: root, APIPrefix: "/api", TimeoutSeconds: 5, Worktrees: map[string]worktree{
 		"a": {UI: newService("a-ui"), Backend: newService("a-backend")},
 		"b": {UI: newService("b-ui"), Backend: newService("b-backend")},
 	}}
+	c = checkedConfig(t, root, c)
 	m := newManager(context.Background(), c)
 	defer m.close()
 	front := httptest.NewServer(m)
@@ -217,13 +224,13 @@ func TestLifecycleAndRouting(t *testing.T) {
 		t.Fatalf("unselected status %d", status)
 	}
 	command("up", "a", "")
-	old := m.processes["a"].backend.cmd.Process.Pid
+	old := m.processes["a"]["backend"].cmd.Process.Pid
 	command("up", "a", "")
-	if old != m.processes["a"].backend.cmd.Process.Pid {
+	if old != m.processes["a"]["backend"].cmd.Process.Pid {
 		t.Fatal("up restarted running process")
 	}
 	command("use", "a", "")
-	if old == m.processes["a"].backend.cmd.Process.Pid {
+	if old == m.processes["a"]["backend"].cmd.Process.Pid {
 		t.Fatal("use did not restart backend")
 	}
 	for path, want := range map[string]string{"/": "a-ui:", "/oauth/callback": "a-ui:", "/api/items": "a-backend:", "/apiculture": "a-ui:"} {
@@ -235,25 +242,25 @@ func TestLifecycleAndRouting(t *testing.T) {
 	if _, body := get("/api"); !strings.HasPrefix(body, "b-backend:") {
 		t.Fatal(body)
 	}
-	if !m.processes["a"].backend.running() {
+	if !m.processes["a"]["backend"].running() {
 		t.Fatal("switch stopped unrelated backend")
 	}
-	old = m.processes["b"].backend.cmd.Process.Pid
-	if err := os.WriteFile(filepath.Join(c.Worktrees["b"].Backend.Dir, "response.txt"), []byte("edited"), 0600); err != nil {
+	old = m.processes["b"]["backend"].cmd.Process.Pid
+	if err := os.WriteFile(filepath.Join(c.Worktrees["b"].Services["backend"].Dir, "response.txt"), []byte("edited"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if _, body := get("/api"); !strings.HasPrefix(body, "b-backend:") {
 		t.Fatal("running code unexpectedly reloaded", body)
 	}
 	command("restart", "b", "backend")
-	if old == m.processes["b"].backend.cmd.Process.Pid {
+	if old == m.processes["b"]["backend"].cmd.Process.Pid {
 		t.Fatal("restart kept PID")
 	}
 	if _, body := get("/api"); !strings.HasPrefix(body, "edited:") {
 		t.Fatal("restart did not load edited code", body)
 	}
 	w := m.c.Worktrees["a"]
-	w.Backend.Env["FLIP_TEST_FAIL"] = "1"
+	w.Services["backend"].Env["FLIP_TEST_FAIL"] = "1"
 	m.c.Worktrees["a"] = w
 	if _, err := m.command("use", "a", ""); err == nil {
 		t.Fatal("failed startup succeeded")
@@ -267,7 +274,7 @@ func TestLifecycleAndRouting(t *testing.T) {
 	}
 	m.close()
 	for _, w := range c.Worktrees {
-		for _, s := range []service{w.UI, w.Backend} {
+		for _, s := range w.Services {
 			l, e := net.Listen("tcp", address(s.Port))
 			if e != nil {
 				t.Errorf("port still occupied: %v", e)
@@ -429,4 +436,21 @@ func TestConfigAndPortCollision(t *testing.T) {
 	if _, err := start(context.Background(), service{Port: l.Addr().(*net.TCPAddr).Port}, filepath.Join(dir, "log")); err == nil {
 		t.Fatal("occupied port accepted")
 	}
+}
+
+func checkedConfig(t *testing.T, root string, c config) config {
+	t.Helper()
+	b, err := json.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "flip.json")
+	if err = os.WriteFile(path, b, 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, err = readConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
 }

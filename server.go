@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -21,21 +22,41 @@ import (
 	"time"
 )
 
-type pair struct{ ui, backend *process }
+type proxyRoute struct {
+	prefix string
+	proxy  *httputil.ReverseProxy
+}
 type selection struct {
-	name        string
-	ui, backend *httputil.ReverseProxy
+	name   string
+	routes []proxyRoute
 }
 type manager struct {
 	c         config
 	mu        sync.Mutex // ponytail: serialize lifecycle commands; per-worktree locks if startup contention matters.
-	processes map[string]*pair
+	processes map[string]map[string]*process
+	previews  map[string]*atomic.Pointer[selection]
 	active    atomic.Pointer[selection]
 	ctx       context.Context
 }
 
 func newManager(ctx context.Context, c config) *manager {
-	return &manager{c: c, ctx: ctx, processes: map[string]*pair{}}
+	m := &manager{c: c, ctx: ctx, processes: map[string]map[string]*process{}, previews: map[string]*atomic.Pointer[selection]{}}
+	for name := range c.Worktrees {
+		m.previews[name] = &atomic.Pointer[selection]{}
+	}
+	return m
+}
+func routesFor(name string, w worktree) *selection {
+	a := &selection{name: name}
+	for _, r := range w.Routes {
+		strip := ""
+		if r.StripPrefix && r.Prefix != "/" {
+			strip = r.Prefix
+		}
+		a.routes = append(a.routes, proxyRoute{prefix: r.Prefix, proxy: proxy(w.Services[r.Service].Port, strip)})
+	}
+	sort.Slice(a.routes, func(i, j int) bool { return len(a.routes[i].prefix) > len(a.routes[j].prefix) })
+	return a
 }
 func proxy(port int, strip string) *httputil.ReverseProxy {
 	target := &url.URL{Scheme: "http", Host: address(port)}
@@ -55,6 +76,12 @@ func proxy(port int, strip string) *httputil.ReverseProxy {
 	}}
 }
 func (m *manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	serveSelection(m.active.Load(), w, r)
+}
+func (m *manager) previewHandler(name string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { serveSelection(m.previews[name].Load(), w, r) })
+}
+func serveSelection(a *selection, w http.ResponseWriter, r *http.Request) {
 	host := r.Host
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		host = h
@@ -63,16 +90,17 @@ func (m *manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "local hosts only", 403)
 		return
 	}
-	a := m.active.Load()
 	if a == nil {
-		http.Error(w, "No worktree selected. Run flip use <name>.", 503)
+		http.Error(w, "No worktree ready. Run flip use <name> for the shared preview or flip up <name> for its own preview.", 503)
 		return
 	}
-	p := a.ui
-	if r.URL.Path == m.c.APIPrefix || strings.HasPrefix(r.URL.Path, m.c.APIPrefix+"/") {
-		p = a.backend
+	for _, route := range a.routes {
+		if route.prefix == "/" || r.URL.Path == route.prefix || strings.HasPrefix(r.URL.Path, route.prefix+"/") {
+			route.proxy.ServeHTTP(w, r)
+			return
+		}
 	}
-	p.ServeHTTP(w, r)
+	http.NotFound(w, r)
 }
 func (m *manager) command(action, name, part string) (string, error) {
 	m.mu.Lock()
@@ -84,102 +112,105 @@ func (m *manager) command(action, name, part string) (string, error) {
 		}
 		sort.Strings(names)
 		var out strings.Builder
-		fmt.Fprintln(&out, "WORKTREE\tUI\tBACKEND\tSELECTED")
+		fmt.Fprintln(&out, "WORKTREE\tSERVICE\tSTATE\tSELECTED\tPREVIEW")
 		for _, n := range names {
-			p := m.processes[n]
-			if p == nil {
-				p = &pair{}
+			wt := m.c.Worktrees[n]
+			preview := "-"
+			if wt.PreviewPort != 0 {
+				preview = fmt.Sprintf("http://localhost:%d", wt.PreviewPort)
 			}
-			a := m.active.Load()
-			fmt.Fprintf(&out, "%s\t%s\t%s\t%t\n", n, processStatus(p.ui), processStatus(p.backend), a != nil && a.name == n)
+			for _, label := range serviceNames(wt) {
+				state := processStatus(m.processes[n][label])
+				if !wt.Services[label].enabled() {
+					state = "disabled"
+				}
+				a := m.active.Load()
+				fmt.Fprintf(&out, "%s\t%s\t%s\t%t\t%s\n", n, label, state, a != nil && a.name == n, preview)
+			}
 		}
 		return out.String(), nil
 	}
-	w, ok := m.c.Worktrees[name]
+	wt, ok := m.c.Worktrees[name]
 	if !ok {
 		return "", fmt.Errorf("unknown worktree %q", name)
 	}
-	if action == "restart" && ((part == "ui" && !w.UI.configured()) || (part == "backend" && !w.Backend.configured())) {
-		return "", fmt.Errorf("%s has no %s service", name, part)
-	}
-	p := m.processes[name]
-	if p == nil {
-		p = &pair{}
-		m.processes[name] = p
-	}
 	if action == "down" {
-		if a := m.active.Load(); a != nil && a.name == name {
-			m.active.Store(nil)
-		}
-		e1, e2 := p.ui.stop(), p.backend.stop()
-		if e1 != nil {
-			return "", e1
-		}
-		if e2 != nil {
-			return "", e2
-		}
-		p.ui = nil
-		p.backend = nil
-		return name + " stopped\n", nil
+		return name + " stopped\n", m.stopWorktree(name)
 	}
 	if action != "up" && action != "use" && action != "restart" {
 		return "", fmt.Errorf("unknown action %q", action)
 	}
-	if action == "restart" && part != "backend" && part != "ui" {
-		return "", fmt.Errorf("restart requires backend or ui")
+	if action == "restart" {
+		s, ok := wt.Services[part]
+		if !ok || !s.enabled() {
+			return "", fmt.Errorf("%s has no enabled %s service", name, part)
+		}
 	}
 	if err := os.MkdirAll(filepath.Join(m.c.root, ".flip"), 0700); err != nil {
 		return "", err
 	}
-	ensure := func(dst **process, s service, label string, restart bool) error {
-		if !s.configured() {
-			return nil
+	procs := m.processes[name]
+	if procs == nil {
+		procs = map[string]*process{}
+		m.processes[name] = procs
+	}
+	for _, label := range serviceNames(wt) {
+		s := wt.Services[label]
+		if !s.enabled() || action == "restart" && label != part {
+			continue
 		}
-		if restart || !(*dst).running() {
-			if err := (*dst).stop(); err != nil {
-				return err
+		if action == "restart" || action == "use" && s.restartOnUse(false) || !procs[label].running() {
+			if err := procs[label].stop(); err != nil {
+				return "", err
 			}
-			*dst = nil
+			delete(procs, label)
 			ctx, cancel := context.WithTimeout(m.ctx, time.Duration(m.c.TimeoutSeconds)*time.Second)
-			defer cancel()
 			p, err := start(ctx, s, filepath.Join(m.c.root, ".flip", name+"-"+label+".log"))
+			cancel()
 			if err != nil {
-				return err
+				return "", fmt.Errorf("%s/%s: %w", name, label, err)
 			}
-			*dst = p
-		}
-		return nil
-	}
-	if action != "restart" || part == "ui" {
-		if err := ensure(&p.ui, w.UI, "ui", action == "restart" || action == "use" && w.UI.restartOnUse(false)); err != nil {
-			return "", err
+			procs[label] = p
 		}
 	}
-	if action != "restart" || part == "backend" {
-		if err := ensure(&p.backend, w.Backend, "backend", action == "use" && w.Backend.restartOnUse(true) || action == "restart"); err != nil {
-			return "", err
+	// Explicit restart affects only its service and never publishes a partial worktree.
+	if action != "restart" {
+		for label, s := range wt.Services {
+			if s.enabled() && !procs[label].running() {
+				return "", fmt.Errorf("%s exited before selection; inspect logs", label)
+			}
+		}
+		a := routesFor(name, wt)
+		m.previews[name].Store(a)
+		if action == "use" {
+			m.active.Store(a)
+			return fmt.Sprintf("Selected %s at http://localhost:%d. Refresh your browser.\n", name, m.c.Port), nil
 		}
 	}
-	if action == "use" {
-		if w.UI.configured() && !p.ui.running() || w.Backend.configured() && !p.backend.running() {
-			return "", fmt.Errorf("a service exited before selection; inspect logs")
-		}
-		strip := ""
-		if m.c.StripPrefix {
-			strip = m.c.APIPrefix
-		}
-		uiPort, backendPort := w.UI.Port, w.Backend.Port
-		if !w.UI.configured() {
-			uiPort = backendPort
-		}
-		if !w.Backend.configured() {
-			backendPort = uiPort
-			strip = ""
-		}
-		m.active.Store(&selection{name: name, ui: proxy(uiPort, ""), backend: proxy(backendPort, strip)})
-		return fmt.Sprintf("Selected %s at http://localhost:%d. Refresh your browser.\n", name, m.c.Port), nil
+	if action == "restart" {
+		return fmt.Sprintf("%s/%s restarted\n", name, part), nil
+	}
+	if wt.PreviewPort != 0 {
+		return fmt.Sprintf("%s ready at http://localhost:%d\n", name, wt.PreviewPort), nil
 	}
 	return name + " ready\n", nil
+}
+
+// Caller holds mu. A failed stop retains its handle so cleanup can be retried.
+func (m *manager) stopWorktree(name string) error {
+	if a := m.active.Load(); a != nil && a.name == name {
+		m.active.Store(nil)
+	}
+	m.previews[name].Store(nil)
+	var errs []error
+	for label, p := range m.processes[name] {
+		if err := p.stop(); err != nil {
+			errs = append(errs, err)
+		} else {
+			delete(m.processes[name], label)
+		}
+	}
+	return errors.Join(errs...)
 }
 func processStatus(p *process) string {
 	if p == nil {
@@ -193,9 +224,8 @@ func processStatus(p *process) string {
 func (m *manager) close() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for _, p := range m.processes {
-		p.ui.stop()
-		p.backend.stop()
+	for name := range m.processes {
+		m.stopWorktree(name)
 	}
 }
 
@@ -221,7 +251,7 @@ func control(m *manager, token string) http.Handler {
 	})
 }
 func serve(c config) error {
-	// Bind both listeners before touching the control token; another instance wins cleanly.
+	// Bind every listener before touching the control token; collisions leave no partial supervisor.
 	admin, err := net.Listen("tcp", address(c.ControlPort))
 	if err != nil {
 		return err
@@ -232,6 +262,22 @@ func serve(c config) error {
 		return err
 	}
 	defer public.Close()
+	previews := map[string]net.Listener{}
+	defer func() {
+		for _, l := range previews {
+			l.Close()
+		}
+	}()
+	for name, wt := range c.Worktrees {
+		if wt.PreviewPort == 0 {
+			continue
+		}
+		l, e := net.Listen("tcp", address(wt.PreviewPort))
+		if e != nil {
+			return fmt.Errorf("%s preview: %w", name, e)
+		}
+		previews[name] = l
+	}
 	dir := filepath.Join(c.root, ".flip")
 	if err = os.MkdirAll(dir, 0700); err != nil {
 		return err
@@ -254,7 +300,12 @@ func serve(c config) error {
 	api := &http.Server{Handler: control(m, token), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second}
 	defer front.Close()
 	defer api.Close()
-	errs := make(chan error, 2)
+	errs := make(chan error, 2+len(previews))
+	for name, l := range previews {
+		server := &http.Server{Handler: m.previewHandler(name), ReadHeaderTimeout: 5 * time.Second}
+		defer server.Close()
+		go func() { errs <- server.Serve(l) }()
+	}
 	go func() { errs <- front.Serve(public) }()
 	go func() { errs <- api.Serve(admin) }()
 	fmt.Printf("Flip listening at http://localhost:%d. Use another terminal for flip commands. Ctrl+C stops owned services.\n", c.Port)
