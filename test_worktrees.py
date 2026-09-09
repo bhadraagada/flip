@@ -19,7 +19,7 @@ import urllib.request
 ROOT = Path(tempfile.mkdtemp(prefix="flip-five-worktrees-"))
 REPORT = []
 HIDDEN = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
-FLIP = str(Path.home() / "go/bin/flip.exe") if os.name == "nt" else shutil.which("flip")
+FLIP = os.environ.get("FLIP_TEST_BINARY") or (str(Path.home() / "go/bin/flip.exe") if os.name == "nt" else shutil.which("flip"))
 assert FLIP, "Install flip on PATH first"
 
 
@@ -184,7 +184,9 @@ try:
 finally:
     for name in names:
         run(FLIP, "down", name, check=False)
-    supervisor.terminate()
+    run(FLIP, "supervisor", "stop", check=False)
+    if supervisor.poll() is None:
+        supervisor.terminate()
     supervisor.wait(timeout=10)
     supervisor_log.close()
     (ROOT / "report.json").write_text(json.dumps({"passed": REPORT, "public_port": public}, indent=2))

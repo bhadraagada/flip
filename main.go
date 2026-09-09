@@ -93,7 +93,7 @@ func run(args []string) error {
 	}
 	data, err := controlRequest(c, action, name, part, time.Duration(c.TimeoutSeconds*len(c.Worktrees[name].Services)+20)*time.Second)
 	if err != nil {
-		return fmt.Errorf("%w (use flip NAME to start the supervisor)", err)
+		return err
 	}
 	fmt.Print(string(data))
 	return nil

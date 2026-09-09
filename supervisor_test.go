@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,6 +17,32 @@ import (
 	"testing"
 	"time"
 )
+
+func TestIdleTimer(t *testing.T) {
+	m := newManager(context.Background(), config{Worktrees: map[string]worktree{"one": {}}})
+	a := m.activity["one"]
+	now := time.Now()
+	a.last = now.Add(-time.Hour)
+	m.reapIdle(now)
+	if a.stopped {
+		t.Fatal("idle shutdown must be opt-in")
+	}
+	m.c.IdleTimeoutSeconds = 1
+	a.begin()
+	m.reapIdle(now)
+	if a.stopped {
+		t.Fatal("active request was stopped")
+	}
+	a.end()
+	m.reapIdle(now)
+	if a.stopped {
+		t.Fatal("request completion did not reset idle time")
+	}
+	m.reapIdle(now.Add(2 * time.Second))
+	if !a.stopped || a.begin() {
+		t.Fatal("expired worktree still accepts requests")
+	}
+}
 
 // Exercise detached ownership through actual, short-lived CLI processes.
 func TestDetachedSupervisor(t *testing.T) {
@@ -34,7 +61,7 @@ func TestDetachedSupervisor(t *testing.T) {
 	no := false
 	// Hold the sockets together while choosing ports, then release before starting.
 	var listeners []net.Listener
-	for range 3 {
+	for range 5 {
 		l, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
 			t.Fatal(err)
@@ -43,6 +70,13 @@ func TestDetachedSupervisor(t *testing.T) {
 	}
 	c := config{Port: listeners[0].Addr().(*net.TCPAddr).Port, ControlPort: listeners[1].Addr().(*net.TCPAddr).Port, APIPrefix: "/api", TimeoutSeconds: 3, IdleTimeoutSeconds: 1,
 		Worktrees: map[string]worktree{"one": {UI: service{Dir: root, Command: []string{exe, "-test.run=^TestHelperProcess$"}, Port: listeners[2].Addr().(*net.TCPAddr).Port, Health: "/health", RestartOnUse: &no, Env: map[string]string{"FLIP_TEST_HELPER": "1", "FLIP_TEST_PORT": "{port}"}}}}}
+	one := c.Worktrees["one"]
+	one.PreviewPort = listeners[3].Addr().(*net.TCPAddr).Port
+	c.Worktrees["one"] = one
+	two := one
+	two.PreviewPort = 0
+	two.UI.Port = listeners[4].Addr().(*net.TCPAddr).Port
+	c.Worktrees["two"] = two
 	for _, l := range listeners {
 		l.Close()
 	}
@@ -105,7 +139,11 @@ func TestDetachedSupervisor(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	conn, err := net.Dial("tcp", address(c.Port))
+	time.Sleep(1500 * time.Millisecond)
+	if out, err := cli("status"); err != nil || !strings.Contains(out, "running:") {
+		t.Fatalf("active stream reaped: %s %v", out, err)
+	}
+	conn, err := net.Dial("tcp", address(c.Worktrees["one"].PreviewPort))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +155,9 @@ func TestDetachedSupervisor(t *testing.T) {
 	if err != nil || upgrade.StatusCode != 101 {
 		t.Fatalf("upgrade: %v %v", upgrade, err)
 	}
-	time.Sleep(1500 * time.Millisecond)
+	if out, err := cli("two"); err != nil {
+		t.Fatal(out, err)
+	}
 	resp.Body.Close() // The socket alone must keep the worktree alive.
 	time.Sleep(1500 * time.Millisecond)
 	if out, err := cli("status"); err != nil || !strings.Contains(out, "running:") {
@@ -146,8 +186,29 @@ func TestDetachedSupervisor(t *testing.T) {
 	if again, err := probeSupervisor(c); err != nil || again.PID != info.PID {
 		t.Fatal("idle shutdown stopped supervisor", again, err)
 	}
+	// Kill only our authenticated test supervisor after all its services are idle.
+	owned, err := os.FindProcess(info.PID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := owned.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	owned.Release()
+	deadline = time.Now().Add(3 * time.Second)
+	for {
+		lock, err := acquireLock(c, "supervisor")
+		if err == nil {
+			lock.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("crashed supervisor retained OS lock", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 	if out, err := cli("one"); err != nil {
-		t.Fatal(out, err)
+		t.Fatalf("crash recovery: %s %v", out, err)
 	}
 	if out, err := cli("supervisor", "stop"); err != nil {
 		t.Fatal(out, err)
@@ -155,7 +216,7 @@ func TestDetachedSupervisor(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, ".flip", "token")); !os.IsNotExist(err) {
 		t.Fatal("token survived stop", err)
 	}
-	for _, port := range []int{c.Port, c.ControlPort, c.Worktrees["one"].Services["ui"].Port} {
+	for _, port := range []int{c.Port, c.ControlPort, c.Worktrees["one"].Services["ui"].Port, c.Worktrees["two"].Services["ui"].Port, c.Worktrees["one"].PreviewPort} {
 		l, err := net.Listen("tcp", address(port))
 		if err != nil {
 			t.Fatalf("owned port %d survived shutdown: %v", port, err)
@@ -165,5 +226,37 @@ func TestDetachedSupervisor(t *testing.T) {
 	if out, err := cli("one"); err != nil {
 		t.Fatalf("restart after shutdown: %s %v", out, err)
 	}
-	t.Log("stale recovery, idle stream/socket protection, shutdown cleanup and detached restart passed")
+	// A readiness failure through another CLI must stop its child on timeout.
+	if out, err := cli("supervisor", "stop"); err != nil {
+		t.Fatal(out, err)
+	}
+	c.TimeoutSeconds = 1
+	one = c.Worktrees["one"]
+	svc := one.Services["ui"]
+	svc.Health = "/notready"
+	one.Services["ui"] = svc
+	c.Worktrees["one"] = one
+	data, _ = json.Marshal(c)
+	os.WriteFile(path, data, 0600)
+	if out, err := cli("one"); err == nil || !strings.Contains(out, "context deadline exceeded") {
+		t.Fatalf("readiness timeout: %s %v", out, err)
+	}
+	if out, err := cli("supervisor", "stop"); err != nil {
+		t.Fatal(out, err)
+	}
+	// An occupied public port belongs to someone else; auto-start must leave it alone.
+	occupied, err := net.Listen("tcp", address(c.Port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer occupied.Close()
+	os.WriteFile(filepath.Join(root, ".flip", "token"), []byte("stale-before-collision"), 0600)
+	if out, err := cli("one"); err == nil {
+		t.Fatalf("occupied public port accepted: %s", out)
+	}
+	token, _ := os.ReadFile(filepath.Join(root, ".flip", "token"))
+	if string(token) != "stale-before-collision" {
+		t.Fatal("failed startup modified token")
+	}
+	t.Log("stale recovery, stream/socket protection across preview switching, timeout and shutdown cleanup passed")
 }

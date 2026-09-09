@@ -15,9 +15,11 @@ For initial setup, `flip init` creates a template without overwriting files. Der
 
 ## Operate
 
-Check `flip status`. If the supervisor is absent, start `flip serve` using the intended config in a persistent terminal or managed session. The supervisor must remain alive; avoid temporary command runners that kill their processes on return. On Windows, hide any background helper window. Keep its logs and process identity available for cleanup.
+`flip NAME`, `up`, and `restart` start a detached supervisor when absent. Check `flip supervisor status` for its PID and `flip status` for services. Use `flip supervisor stop` to stop the supervisor and all owned services before editing config or changing inherited environment. `serve` remains available for foreground debugging. Windows background windows are hidden. Inspect `.flip/supervisor.log` on startup failure; keep `.flip/*.lock` files in place and stop only owned processes.
 
 `flip NAME` means `flip use NAME`: start missing services, restart those configured with restart_on_use, then select the worktree's routes. Use it when the user wants to change the shared preview. `flip up NAME` starts services without changing selection. After edits that need a restart, use `flip restart NAME backend` or `flip restart NAME ui` for the configured service. `flip down NAME` stops that worktree's owned services.
+
+Idle shutdown is opt-in through top-level `idle_timeout_seconds`, with zero disabling it. It stops unused worktrees and leaves the supervisor running. Requests, streams and sockets through both preview addresses keep a worktree alive until they close. Status checks, direct internal-port traffic and worker jobs do not count. Enable it only when those jobs may stop after preview inactivity.
 
 Switching affects every tab on the shared browser address. During parallel agent work, keep selection unchanged unless preview switching is part of the requested task; use `up` for preparation. Finish active login before switching. Refresh browser tabs after a successful switch.
 

@@ -14,10 +14,10 @@ Install directly from GitHub:
 go install github.com/bhadraagada/flip@latest
 flip init
 # Edit flip.json with your app paths and commands.
-flip serve
+flip main
 ```
 
-Keep `serve` running and run `flip main` in another terminal to select your configured worktree. Ensure your Go bin directory is on PATH, normally `~/go/bin`.
+`flip main` starts a background supervisor and selects your configured worktree. The CLI returns while the preview stays running. Ensure your Go bin directory is on PATH, normally `~/go/bin`.
 
 Or build from a checkout:
 
@@ -25,10 +25,10 @@ Or build from a checkout:
 go build -o flip.exe .
 .\flip.exe init
 # Edit flip.json with your real paths, commands and health routes.
-.\flip.exe serve
+.\flip.exe main
 ```
 
-Keep `serve` running. In another terminal, from the same directory:
+From the same directory:
 
 ```powershell
 .\flip.exe up main
@@ -40,19 +40,19 @@ Keep `serve` running. In another terminal, from the same directory:
 
 To install `flip` on your Go binary path, run `go install .`. With that directory on PATH, use `flip main` as shorthand for `flip use main`. Existing commands such as `flip status` still work; use `flip use status` if a worktree has a reserved command name.
 
-On Linux/macOS, build with `go build -o flip .` and use `./flip`. Config lookup uses `-config`, then the `FLIP_CONFIG` environment variable, then `flip.json` in the current directory. Set `FLIP_CONFIG` to an absolute config path to use Flip from any directory. Put flags before the command. `serve` must still be running.
+On Linux/macOS, build with `go build -o flip .` and use `./flip`. Config lookup uses `-config`, then the `FLIP_CONFIG` environment variable, then `flip.json` in the current directory. Set `FLIP_CONFIG` to an absolute config path to use Flip from any directory. Put flags before the command.
 
 ## Configuration
 
-`init` writes an example without overwriting existing files. Edit it before starting `serve`. Add another entry under `worktrees` for each existing checkout; Flip does not create Git worktrees.
+`init` writes an example without overwriting existing files. Edit it before starting your first preview. Add another entry under `worktrees` for each existing checkout; Flip does not create Git worktrees.
 
 - Paths are relative to the config file. Each service has its own working directory.
 - Commands are argument arrays, executed directly without a shell. `{port}` expands to that service's configured port. Use an explicit Python executable such as `.venv/Scripts/python.exe` when needed.
 - On Windows, invoke executables directly, such as Node with a JavaScript entrypoint. `npm.cmd` requires an explicit shell. You can explicitly use a shell in your command if your project requires one; only use trusted config files.
 - Ports must be unique. Configure servers to bind `127.0.0.1`; use Vite `--strictPort` so it cannot silently move to another port.
 - `health` is an HTTP route on the internal service. Flip waits for a 2xx or 3xx response; redirects are not followed. Prefer a dedicated unauthenticated readiness route that only succeeds after initialization. The template uses `/`; change it to your service's readiness route.
-- Optional `env` is an object of per-service environment overrides. Flip also inherits the environment of `serve`. It does not parse `.env` files; your startup command or app must load them.
-- Config is read when `serve` starts. Stop and restart it after editing config. Keep the config unchanged while it runs.
+- Optional `env` is an object of per-service environment overrides. Flip also inherits the environment of the command that starts the supervisor. It does not parse `.env` files; your startup command or app must load them.
+- Config is read at supervisor startup. Run `flip supervisor stop` before editing config or changing inherited environment, then run `flip NAME` to restart it. Keep the config unchanged while it runs.
 
 The template uses a placeholder command, `your-dev-server`. Replace it with your actual executable and arguments. Flip does not install frameworks or infer their startup flags.
 
@@ -76,7 +76,9 @@ Forwarded headers describe the public request. Flip preserves its Host header. C
 
 | Command | Behavior |
 | --- | --- |
-| `serve` | Starts the loopback proxy and control listener; no app starts automatically. |
+| `serve` | Runs the supervisor in the foreground for debugging. Ctrl+C stops its owned services. |
+| `supervisor status` | Reports the authenticated supervisor PID without starting it. |
+| `supervisor stop` | Stops the supervisor and all its owned services, then waits for cleanup. |
 | `up NAME` | Starts missing services and waits for readiness. Does not select or restart healthy processes. |
 | `use NAME` | Starts configured services, restarts those with restart_on_use enabled, then selects the worktree. |
 | `restart NAME backend` | Restarts just the backend, retaining selection. `ui` also works. |
@@ -85,11 +87,23 @@ Forwarded headers describe the public request. Flip preserves its Host header. C
 
 If a target fails to start, the previous selection remains. A UI that started successfully may stay running after a backend startup failure; `down` cleans it up. Restarting the selected backend creates a short outage. For services without automatic reload, edits require `restart` or another `use` with restart_on_use enabled.
 
-Logs append to `.flip/NAME-ui.log` and `.flip/NAME-backend.log`. Ctrl+C in `serve` stops its owned service trees. Shutdown force-terminates services; it does not promise graceful completion of background jobs. Windows uses Job Objects; Unix uses process groups. Services must remain in the foreground and must not daemonize or escape their process group/job.
+`NAME`, `use`, `up`, and `restart` start the supervisor automatically when needed. `status`, `supervisor status`, `supervisor stop`, and `down` never start it.
+
+Logs append to `.flip/NAME-SERVICE.log`; detached supervisor diagnostics go to `.flip/supervisor.log`. Ctrl+C in `serve` stops its owned service trees. Shutdown force-terminates services; it does not promise graceful completion of background jobs. Windows uses Job Objects; Unix uses process groups. Services must remain in the foreground and must not daemonize or escape their process group/job.
+
+## Automatic startup and idle shutdown
+
+Concurrent CLI starts share one supervisor per config directory. OS-held locks survive CLI exit and release when the supervisor exits or crashes. Keep the empty `.flip/*.lock` files in place; deleting a live lock file can defeat locking on Unix. The supervisor binds every listener before replacing a stale token. A failed bind leaves the occupying process alone. No cleanup command kills a PID read from a stale file.
+
+Windows background windows stay hidden. Normal shutdown stops owned process trees on Windows and Unix; Unix also handles SIGTERM. Windows Job Objects clean services up after a supervisor crash. An uncatchable Unix kill such as SIGKILL can leave service groups running; Flip reports their occupied ports on the next startup instead of killing unverified processes.
+
+Idle shutdown is disabled by default. Set top-level `"idle_timeout_seconds": 900` to stop a worktree after fifteen minutes without traffic through either its shared or independent preview. A successful start, switch or restart resets the timer. In-flight requests, streaming responses and upgraded sockets keep their original worktree alive for the whole connection, even after a shared-preview switch. Status checks and ordinary HTTP keep-alive connections between requests do not reset the timer.
+
+Expiry stops the worktree's services and clears its routes. The supervisor stays available; run `flip NAME` or `flip up NAME` to start that worktree again. Traffic sent directly to an internal service port and background worker jobs cannot be observed by this timer. Enable it only when stopping those jobs after preview inactivity is acceptable.
 
 ## Scope
 
-The first version has explicit config and one foreground supervisor. No auto-discovery, automatic port allocation, background daemon installation, file watching, or database isolation.
+The supervisor is an ordinary detached process, not an installed OS service. It does not start at login. No file watching or database isolation is provided.
 
 All browser tabs on 8080 share the selection. Refresh them after switching; existing requests and sockets are not migrated. Finish login and active operations before switching. Cookies, local storage, databases, queues and scheduled jobs are not isolated by worktrees. Separate their configuration when branches could conflict.
 
@@ -104,7 +118,9 @@ go vet ./...
 
 Tests launch real child HTTP servers and check switching, backend restart, failed-start selection, port collisions, process cleanup, callback routing, API boundaries, prefix stripping, upgraded socket traffic and control authentication.
 
-For the full installed-CLI check, run `py test_worktrees.py`. It requires Git, Node/npm, FastAPI and Uvicorn. It installs Vite in a temporary project, creates five real Git worktrees, runs ten servers, checks switching and a real HMR update, and stops its processes. The printed temporary directory retains the fixture, logs and `report.json`. It uses free ports so an existing preview on 8080 is left alone. This tests callback routing, not a real Google login.
+`TestDetachedSupervisor` builds a temporary CLI, or uses `FLIP_TEST_BINARY` when set, and launches separate CLI processes to check concurrent startup, stale tokens, streaming/socket idle protection, readiness timeouts and shutdown cleanup.
+
+For the full CLI check, set `FLIP_TEST_BINARY` to your absolute local build path and run `py test_worktrees.py`. It requires Git, Node/npm, FastAPI and Uvicorn. It installs Vite in a temporary project, creates five real Git worktrees, runs ten servers, checks switching and a real HMR update, and stops its processes. The printed temporary directory retains the fixture, logs and `report.json`. It uses free ports so an existing preview on 8080 is left alone. This tests callback routing, not a real Google login.
 
 References: [Go reverse proxy](https://pkg.go.dev/net/http/httputil#ReverseProxy), [Windows Job Objects](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects), [Vite server options](https://vite.dev/config/server-options), [Google OAuth](https://developers.google.com/identity/protocols/oauth2/web-server).
 
