@@ -19,7 +19,7 @@ import urllib.request
 ROOT = Path(tempfile.mkdtemp(prefix="flip-five-worktrees-"))
 REPORT = []
 HIDDEN = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
-FLIP = os.environ.get("FLIP_TEST_BINARY") or (str(Path.home() / "go/bin/flip.exe") if os.name == "nt" else shutil.which("flip"))
+FLIP = os.environ.get("FLIP_BINARY") or (str(Path.home() / "go/bin/flip.exe") if os.name == "nt" else shutil.which("flip"))
 assert FLIP, "Install flip on PATH first"
 
 
