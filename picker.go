@@ -51,18 +51,16 @@ func (m *manager) previewState() previewState {
 		if a := m.active.Load(); a != nil {
 			row.Selected = a.name == name
 		}
-		p := m.processes[name]
-		if p == nil {
-			p = &pair{}
+		if w.PreviewPort != 0 {
+			row.URL = fmt.Sprintf("http://localhost:%d", w.PreviewPort)
 		}
-		for _, item := range []struct {
-			name string
-			s    service
-			p    *process
-		}{{"ui", w.UI, p.ui}, {"backend", w.Backend, p.backend}} {
-			if item.s.configured() {
-				row.Services = append(row.Services, serviceView{item.name, processStatus(item.p), item.s.Port})
+		for _, label := range serviceNames(w) {
+			s := w.Services[label]
+			status := processStatus(m.processes[name][label])
+			if !s.enabled() {
+				status = "disabled"
 			}
+			row.Services = append(row.Services, serviceView{label, status, s.Port})
 		}
 		state.Worktrees = append(state.Worktrees, row)
 	}

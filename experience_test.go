@@ -43,7 +43,7 @@ func TestRecentLogs(t *testing.T) {
 	os.Mkdir(filepath.Join(root, ".flip"), 0700)
 	path := filepath.Join(root, ".flip", "one-ui.log")
 	os.WriteFile(path, []byte("old\n"), 0600)
-	c := config{root: root, Worktrees: map[string]worktree{"one": {UI: service{Command: []string{"unused"}}}}}
+	c := config{root: root, Worktrees: map[string]worktree{"one": {Services: map[string]service{"ui": {Command: []string{"unused"}}}}}}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	reader, writer := io.Pipe()
@@ -69,7 +69,7 @@ func TestRecentLogs(t *testing.T) {
 }
 
 func TestPickerAuthentication(t *testing.T) {
-	m := newManager(context.Background(), config{ControlPort: 19091, Port: 19092, Worktrees: map[string]worktree{"one": {UI: service{Command: []string{"missing"}}}}})
+	m := newManager(context.Background(), config{ControlPort: 19091, Port: 19092, Worktrees: map[string]worktree{"one": {Services: map[string]service{"ui": {Command: []string{"missing"}}}}}})
 	p := newPicker(m)
 	origin := "http://" + address(m.c.ControlPort)
 	call := func(path, body, session, from string) *httptest.ResponseRecorder {
@@ -140,7 +140,7 @@ func TestPickerAuthentication(t *testing.T) {
 
 func TestDoctorDoesNotStartApps(t *testing.T) {
 	root := t.TempDir()
-	c := config{root: root, Port: freePort(t), ControlPort: freePort(t), APIPrefix: "/api", Worktrees: map[string]worktree{"broken": {UI: service{Command: []string{"flip-missing-executable-34724"}, Dir: root, Port: freePort(t)}}}}
+	c := config{root: root, Port: freePort(t), ControlPort: freePort(t), APIPrefix: "/api", Worktrees: map[string]worktree{"broken": {Services: map[string]service{"ui": {Command: []string{"flip-missing-executable-34724"}, Dir: root, Port: freePort(t)}}}}}
 	var out bytes.Buffer
 	if err := doctor(c, &out); err == nil || !strings.Contains(out.String(), "install the executable") {
 		t.Fatal(err, out.String())

@@ -27,7 +27,7 @@ func logs(ctx context.Context, c config, args []string, out io.Writer) error {
 	if !ok {
 		return fmt.Errorf("unknown worktree %q", args[0])
 	}
-	s, ok := map[string]service{"ui": w.UI, "backend": w.Backend}[args[1]]
+	s, ok := w.Services[args[1]]
 	if !ok || !s.configured() {
 		return fmt.Errorf("%s has no %s service", args[0], args[1])
 	}

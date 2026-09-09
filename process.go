@@ -45,11 +45,13 @@ func (p *process) stop() error {
 func address(port int) string { return net.JoinHostPort("127.0.0.1", strconv.Itoa(port)) }
 
 func start(ctx context.Context, s service, logPath string) (*process, error) {
-	l, err := net.Listen("tcp", address(s.Port))
-	if err != nil {
-		return nil, fmt.Errorf("port %d is occupied: %w", s.Port, err)
+	if s.Type != "worker" {
+		l, err := net.Listen("tcp", address(s.Port))
+		if err != nil {
+			return nil, fmt.Errorf("port %d is occupied: %w", s.Port, err)
+		}
+		l.Close()
 	}
-	l.Close()
 	args := make([]string, len(s.Command))
 	for i, a := range s.Command {
 		args[i] = strings.ReplaceAll(a, "{port}", strconv.Itoa(s.Port))
@@ -76,6 +78,24 @@ func start(ctx context.Context, s service, logPath string) (*process, error) {
 	}
 	p := &process{cmd: cmd, done: make(chan struct{}), stopTree: stop}
 	go func() { cmd.Wait(); f.Close(); close(p.done) }()
+	if s.Type == "worker" {
+		timer := time.NewTimer(500 * time.Millisecond)
+		defer timer.Stop()
+		select {
+		case <-p.done:
+			p.stopTree()
+			return nil, fmt.Errorf("worker exited during startup; see %s", logPath)
+		case <-ctx.Done():
+			p.stop()
+			return nil, fmt.Errorf("worker startup failed: %w; see %s", ctx.Err(), logPath)
+		case <-timer.C:
+			if !p.running() {
+				p.stopTree()
+				return nil, fmt.Errorf("worker exited during startup; see %s", logPath)
+			}
+			return p, nil
+		}
+	}
 	client := &http.Client{Timeout: 500 * time.Millisecond, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	defer client.CloseIdleConnections()
 	ticker := time.NewTicker(100 * time.Millisecond)

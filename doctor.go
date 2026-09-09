@@ -65,9 +65,9 @@ func doctor(c config, out io.Writer) error {
 		port int
 	}{{"shared preview", c.Port}, {"control", c.ControlPort}} {
 		if online {
-			fmt.Fprintf(out, "OK  %s configured at http://%s\n", item.name, address(item.port))
+			fmt.Fprintf(out, "OK  %s configured at http://%s\n", serviceName, address(item.port))
 		} else {
-			check(available(item.port), "%s port %d must be free; if occupied, choose another port or inspect its owner", item.name, item.port)
+			check(available(item.port), "%s port %d must be free; if occupied, choose another port or inspect its owner", serviceName, item.port)
 		}
 	}
 	names := make([]string, 0, len(c.Worktrees))
@@ -77,15 +77,13 @@ func doctor(c config, out io.Writer) error {
 	sort.Strings(names)
 	for _, name := range names {
 		w := c.Worktrees[name]
-		for _, item := range []struct {
-			name string
-			s    service
-		}{{"ui", w.UI}, {"backend", w.Backend}} {
-			s := item.s
-			if !s.configured() {
+		for _, serviceName := range serviceNames(w) {
+			s := w.Services[serviceName]
+			if !s.enabled() {
+				fmt.Fprintf(out, "SKIP  %s/%s is disabled\n", name, serviceName)
 				continue
 			}
-			label := name + "/" + item.name
+			label := name + "/" + serviceName
 			command := strings.ReplaceAll(s.Command[0], "{port}", strconv.Itoa(s.Port))
 			if strings.ContainsAny(command, `/\`) && !filepath.IsAbs(command) {
 				command = filepath.Join(s.Dir, command)
@@ -96,11 +94,15 @@ func doctor(c config, out io.Writer) error {
 			for _, tree := range state.Worktrees {
 				if tree.Name == name {
 					for _, svc := range tree.Services {
-						if svc.Name == item.name {
+						if svc.Name == serviceName {
 							running = strings.HasPrefix(svc.Status, "running:")
 						}
 					}
 				}
+			}
+			if s.Type == "worker" {
+				fmt.Fprintf(out, "SKIP  %s readiness: worker has no HTTP probe\n", label)
+				continue
 			}
 			if !running {
 				check(available(s.Port), "%s port %d is available for startup; occupied ports are never taken over", label, s.Port)
@@ -109,13 +111,18 @@ func doctor(c config, out io.Writer) error {
 			}
 			resp, e := client.Get("http://" + address(s.Port) + s.Health)
 			if e != nil {
-				check(false, "%s readiness unreachable; inspect flip logs %s %s", label, name, item.name)
+				check(false, "%s readiness unreachable; inspect flip logs %s %s", label, name, serviceName)
 				continue
 			}
 			resp.Body.Close()
-			check(resp.StatusCode >= 200 && resp.StatusCode < 400, "%s readiness returned HTTP %d; on failure inspect health path and flip logs %s %s", label, resp.StatusCode, name, item.name)
+			check(resp.StatusCode >= 200 && resp.StatusCode < 400, "%s readiness returned HTTP %d; on failure inspect health path and flip logs %s %s", label, resp.StatusCode, name, serviceName)
 		}
-		fmt.Fprintf(out, "OK  %s routing: API prefix %s, strip=%t; configured service fallback applies. No preview request sent.\n", name, c.APIPrefix, c.StripPrefix)
+		for _, route := range w.Routes {
+			fmt.Fprintf(out, "OK  %s route %s -> %s, strip=%t. No preview request sent.\n", name, route.Prefix, route.Service, route.StripPrefix)
+		}
+		if w.PreviewPort != 0 && !online {
+			check(available(w.PreviewPort), "%s preview port %d must be free", name, w.PreviewPort)
+		}
 	}
 	if online {
 		selected := "none"
