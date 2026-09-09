@@ -21,7 +21,9 @@ Check `flip status`. If the supervisor is absent, start `flip serve` using the i
 
 Switching affects every tab on the shared browser address. During parallel agent work, keep selection unchanged unless preview switching is part of the requested task; use `up` for preparation. Finish active login before switching. Refresh browser tabs after a successful switch.
 
-On failure, read `.flip/NAME-ui.log` or `.flip/NAME-backend.log` beside the config. A failed target startup leaves the previous selection unchanged; restarting the selected backend briefly interrupts it. Fix the reported command, dependency, port or readiness issue before retrying. Stop only Flip-owned processes, not arbitrary processes occupying a port.
+On failure, use `flip logs NAME SERVICE -n 100`, or add `-f` to follow appended output until Ctrl+C. It works while the supervisor is stopped and supports named HTTP services and workers. Run `flip doctor` for actionable config, executable, port, readiness and routing checks. Doctor never starts, stops or wakes apps; it probes readiness directly only for HTTP services reported running by the authenticated supervisor. Fix the reported issue before retrying. A failed target startup leaves the previous selection unchanged. Stop only Flip-owned processes, not arbitrary processes occupying a port.
+
+Use `flip picker` when the user wants a browser view of worktrees, service states and shared or parallel preview links. Open its private login URL within one minute; never paste the grant into reports or logs. The browser receives a temporary picker-only session, never the CLI control token. Selection has the same restart and shared-tab effects as `flip use`. Refresh status to get a new snapshot, and obtain a new login link after expiry or supervisor restart.
 
 ## Routing and completion
 

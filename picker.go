@@ -168,7 +168,7 @@ func (p *picker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.mu.Lock()
 	expiry, ok := p.sessions[strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")]
 	p.mu.Unlock()
-	if !ok || !time.Now().Before(expiry) {
+	if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") || !ok || !time.Now().Before(expiry) {
 		http.Error(w, "Session expired. Run flip picker for a new link.", 403)
 		return
 	}

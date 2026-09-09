@@ -48,9 +48,12 @@ func TestRecentLogs(t *testing.T) {
 	defer cancel()
 	reader, writer := io.Pipe()
 	done := make(chan error, 1)
-	go func() { done <- logs(ctx, c, []string{"one", "ui", "-n", "0", "-f"}, writer); writer.Close() }()
-	// Allow the follower to seek to the end before appending a new line.
-	time.Sleep(100 * time.Millisecond)
+	go func() { done <- logs(ctx, c, []string{"one", "ui", "-n", "1", "-f"}, writer); writer.Close() }()
+	// Reading the old line proves the follower reached the end before appending.
+	old := make([]byte, 4)
+	if _, err := io.ReadFull(reader, old); err != nil || string(old) != "old\n" {
+		t.Fatal(string(old), err)
+	}
 	f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
 	f.WriteString("new\n")
 	f.Close()

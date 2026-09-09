@@ -65,9 +65,9 @@ func doctor(c config, out io.Writer) error {
 		port int
 	}{{"shared preview", c.Port}, {"control", c.ControlPort}} {
 		if online {
-			fmt.Fprintf(out, "OK  %s configured at http://%s\n", serviceName, address(item.port))
+			fmt.Fprintf(out, "OK  %s configured at http://%s\n", item.name, address(item.port))
 		} else {
-			check(available(item.port), "%s port %d must be free; if occupied, choose another port or inspect its owner", serviceName, item.port)
+			check(available(item.port), "%s port %d must be free; if occupied, choose another port or inspect its owner", item.name, item.port)
 		}
 	}
 	names := make([]string, 0, len(c.Worktrees))

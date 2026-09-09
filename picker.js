@@ -34,13 +34,18 @@ async function update(action = 'status', name = '') {
   message(action === 'use' ? 'Starting '+name+' and waiting for readiness…' : 'Reading service status…');
   try { render(await request('/picker/api',{Action:action,Name:name})); message(action === 'use' ? 'Selected '+name+'. Refresh your app tabs.' : 'Status updated.'); }
   catch (error) { message(error.message.trim(),true); }
-  finally { $('worktrees').setAttribute('aria-busy','false'); document.querySelectorAll('button').forEach(b => b.disabled = !session); }
+  finally {
+    $('worktrees').setAttribute('aria-busy','false'); document.querySelectorAll('button').forEach(b => b.disabled = !session);
+    if (action === 'use') [...document.querySelectorAll('button')].find(b => b.getAttribute('aria-label') === 'Select '+name+' preview')?.focus({preventScroll:true});
+  }
 }
 $('refresh').onclick = () => update();
-(async () => {
+async function login() {
   const grant = location.hash.slice(1); history.replaceState(null,'',location.pathname);
   try {
     if (grant) { session = ''; sessionStorage.removeItem('flip-picker'); session = (await request('/picker/session',{Grant:grant})).session; sessionStorage.setItem('flip-picker',session); }
     if (session) await update();
   } catch (error) { message(error.message.trim(),true); }
-})();
+}
+window.addEventListener('hashchange',login);
+login();
