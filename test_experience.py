@@ -24,6 +24,7 @@ assert NODE, "Node must be installed"
 scratch = Path(__file__).resolve().parent / "work"
 scratch.mkdir(exist_ok=True)
 ROOT = Path(tempfile.mkdtemp(prefix="experience-", dir=scratch))
+ENV = dict(os.environ, FLIP_HOME=str(ROOT / "state"), FLIP_CONFIG="")
 HIDDEN = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
 checks = []
 listeners = []
@@ -31,7 +32,7 @@ ports = set()
 
 
 def run(*args, cwd=ROOT, check=True):
-    result = subprocess.run(args, cwd=cwd, capture_output=True, text=True, **HIDDEN)
+    result = subprocess.run(args, cwd=cwd, env=ENV, capture_output=True, text=True, **HIDDEN)
     if check:
         assert result.returncode == 0, result.stderr
     return result
@@ -83,13 +84,14 @@ repo = ROOT / "main"
 repo.mkdir()
 run("git", "init", "-b", "main", cwd=repo)
 app = '''const http=require('node:http');
+const name=process.env.NAME||require('node:path').basename(process.cwd());
 let healthy=true;
-console.log('started '+process.env.NAME+' '+process.env.SERVICE);
+console.log('started '+name+' '+process.env.SERVICE);
 http.createServer((q,r)=>{
   console.log(q.url);
   if(q.url==='/unhealthy') healthy=false;
   if(q.url==='/health') {r.statusCode=healthy?204:503;r.end();return;}
-  r.end(JSON.stringify({name:process.env.NAME,service:process.env.SERVICE,path:q.url,pid:process.pid}));
+  r.end(JSON.stringify({name,service:process.env.SERVICE,path:q.url,pid:process.pid}));
 }).listen(+process.env.PORT,'127.0.0.1');
 '''
 (repo / "app.js").write_text(app)
@@ -111,23 +113,41 @@ for name in names:
     c["worktrees"][name] = {"preview_port": reserve(), "services": services,
                              "routes": [{"prefix": "/", "service": "web"},
                                         {"prefix": "/api", "service": "api", "strip_prefix": True}]}
-(ROOT / "flip.json").write_text(json.dumps(c))
+template = {label: {**service, "dir": ".", "port": 0,
+                   "env": {k: v for k, v in service.get("env", {}).items() if k != "NAME"}}
+            for label, service in c["worktrees"]["feature-a"]["services"].items()}
+configured = {**c, "worktrees": {"main": c["worktrees"]["main"]},
+              "discover": {"repo": "main", "preview": True, "port_min": 41000, "port_max": 41999,
+                           "services": template, "routes": c["worktrees"]["main"]["routes"]}}
+(ROOT / "flip.json").write_text(json.dumps(configured))
 for sock in listeners:
     sock.close()
-assert flip("doctor").returncode == 0
+assert "flip discover" in flip("doctor", check=False).stderr
+assert not (ROOT / "state").exists()
 assert not (ROOT / ".flip").exists()
-passed("Offline doctor validates five worktrees without creating state")
+discovered = flip("discover").stdout
+for row in discovered.splitlines()[1:]:
+    name, service, port, preview, _ = row.split("\t")
+    c["worktrees"][name]["services"][service]["port"] = int(port)
+    c["worktrees"][name]["preview_port"] = int(preview)
+    ports.update(p for p in [int(port), int(preview)] if p)
+flip("register", "fixture")
+state_file = ROOT / "state/state.json"
+saved = (state_file.read_bytes(), state_file.stat().st_mtime_ns)
+assert flip("doctor").returncode == 0
+assert run(FLIP, "-project", "fixture", "doctor", cwd=ROOT / "feature-d").returncode == 0
+assert (state_file.read_bytes(), state_file.stat().st_mtime_ns) == saved
+assert not (ROOT / ".flip").exists()
+passed("Discovery allocates five worktrees; doctor resolves registration without allocating or writing state")
 
-log = (ROOT / "supervisor.log").open("w")
-supervisor = subprocess.Popen([FLIP, "-config", str(ROOT / "flip.json"), "serve"], stdout=log, stderr=log, **HIDDEN)
 follower = None
 try:
-    wait(lambda: (ROOT / ".flip/token").exists())
     for name in names:
         flip("up", name)
+    assert flip("supervisor", "status").returncode == 0
     status = flip("status").stdout
     assert status.count("running:") == 11 and status.count("disabled") == 4, status
-    passed("Ten HTTP services and one opted-in worker run across five real worktrees")
+    passed("Automatic supervisor starts ten HTTP services and one opted-in worker across five worktrees")
     public = f"http://127.0.0.1:{c['port']}"
     for name in names:
         flip(name)
@@ -145,7 +165,7 @@ try:
     assert flip("status").stdout == before
     passed("Live doctor preserves all PIDs and selection")
     assert "worker started" in flip("logs", "main", "worker").stdout
-    follower = subprocess.Popen([FLIP, "-config", str(ROOT / "flip.json"), "logs", "main", "web", "-n", "1", "-f"], stdout=subprocess.PIPE, text=True, **HIDDEN)
+    follower = subprocess.Popen([FLIP, "-config", str(ROOT / "flip.json"), "logs", "main", "web", "-n", "1", "-f"], env=ENV, stdout=subprocess.PIPE, text=True, **HIDDEN)
     lines = queue.Queue()
     threading.Thread(target=lambda: [lines.put(line) for line in follower.stdout], daemon=True).start()
     lines.get(timeout=5)
@@ -197,12 +217,28 @@ try:
         assert "FAIL  feature-a/web port" in failed.stdout
         assert unrelated.getsockname()[1] > 0
     passed("Doctor reports readiness failure and unrelated port collision without changing processes")
+    flip("supervisor", "stop")
+    assert "started main web" in flip("logs", "main", "web").stdout
+    (ROOT / "feature-a/app.js").write_text(app)
+    configured["idle_timeout_seconds"] = 2
+    (ROOT / "flip.json").write_text(json.dumps(configured))
+    flip("main")
+    assert request(base + "/picker/api", {"Action": "status"}, headers)[0] == 403
+    fresh_grant = flip("picker").stdout.strip().split("#")[1]
+    headers["Authorization"] = "Bearer " + json.loads(request(base + "/picker/session", {"Grant": fresh_grant}, headers)[1])["session"]
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        flip("doctor")
+        assert request(base + "/picker/api", {"Action": "status"}, headers)[0] == 200
+        time.sleep(.25)
+    assert "running:" not in flip("status").stdout
+    flip("main")
+    assert flip("status").stdout.count("running:") == 3
+    passed("Doctor and picker status allow idle expiry; CLI restarts services and supervisor restart revokes browser sessions")
 finally:
     if follower is not None:
         follower.terminate(); follower.wait(timeout=5)
-    for name in names:
-        flip("down", name, check=False)
-    supervisor.terminate(); supervisor.wait(timeout=10); log.close()
+    flip("supervisor", "stop", check=False)
     (ROOT / "report.json").write_text(json.dumps({"checks": checks}, indent=2))
 for port in ports:
     with socket.socket() as sock:

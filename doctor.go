@@ -40,24 +40,37 @@ func doctor(c config, out io.Writer) error {
 	if online {
 		fmt.Fprintln(out, "OK  Authenticated supervisor answered.")
 	} else {
-		fmt.Fprintln(out, "WARN  Supervisor unavailable; run flip serve to enable live ownership and routing checks.")
+		fmt.Fprintln(out, "WARN  Supervisor unavailable or busy; inspect flip supervisor status, or run flip serve to enable live checks.")
 	}
-	available := func(port int) bool {
-		l, e := net.Listen("tcp", address(port))
-		if e != nil {
-			return false
+	checkPort := func(label string, port int, listening bool) {
+		if listening {
+			conn, err := net.DialTimeout("tcp", address(port), time.Second)
+			if err != nil {
+				check(false, "%s port %d is unreachable; inspect flip supervisor status", label, port)
+				return
+			}
+			conn.Close()
+			check(true, "%s listening at http://%s", label, address(port))
+			return
 		}
-		l.Close()
-		return true
+		listener, err := net.Listen("tcp", address(port))
+		if err != nil {
+			check(false, "%s port %d is unavailable; inspect its owner or choose another port: %v", label, port, err)
+			return
+		}
+		listener.Close()
+		check(true, "%s port %d is available", label, port)
 	}
 	for _, item := range []struct {
 		name string
 		port int
 	}{{"shared preview", c.Port}, {"control", c.ControlPort}} {
-		if online {
-			fmt.Fprintf(out, "OK  %s configured at http://%s\n", item.name, address(item.port))
-		} else {
-			check(available(item.port), "%s port %d must be free; if occupied, choose another port or inspect its owner", item.name, item.port)
+		checkPort(item.name, item.port, online)
+	}
+	running := map[string]bool{}
+	for _, tree := range state.Worktrees {
+		for _, svc := range tree.Services {
+			running[tree.Name+"/"+svc.Name] = strings.HasPrefix(svc.Status, "running:")
 		}
 	}
 	names := make([]string, 0, len(c.Worktrees))
@@ -79,23 +92,17 @@ func doctor(c config, out io.Writer) error {
 				command = filepath.Join(s.Dir, command)
 			}
 			_, e := exec.LookPath(command)
-			check(e == nil, "%s command executable lookup%s", label, diagnosticHint(e, "; install the executable or correct command[0] and PATH"))
-			running := false
-			for _, tree := range state.Worktrees {
-				if tree.Name == name {
-					for _, svc := range tree.Services {
-						if svc.Name == serviceName {
-							running = strings.HasPrefix(svc.Status, "running:")
-						}
-					}
-				}
+			if e != nil {
+				check(false, "%s command lookup failed; install the executable or correct command[0] and PATH: %v", label, e)
+			} else {
+				check(true, "%s command executable found", label)
 			}
 			if s.Type == "worker" {
 				fmt.Fprintf(out, "SKIP  %s readiness: worker has no HTTP probe\n", label)
 				continue
 			}
-			if !running {
-				check(available(s.Port), "%s port %d is available for startup; occupied ports are never taken over", label, s.Port)
+			if !running[label] {
+				checkPort(label, s.Port, false)
 				fmt.Fprintf(out, "SKIP  %s readiness: service is stopped or ownership is unverified\n", label)
 				continue
 			}
@@ -110,8 +117,8 @@ func doctor(c config, out io.Writer) error {
 		for _, route := range w.Routes {
 			fmt.Fprintf(out, "OK  %s route %s -> %s, strip=%t. No preview request sent.\n", name, route.Prefix, route.Service, route.StripPrefix)
 		}
-		if w.PreviewPort != 0 && !online {
-			check(available(w.PreviewPort), "%s preview port %d must be free", name, w.PreviewPort)
+		if w.PreviewPort != 0 {
+			checkPort(name+" preview", w.PreviewPort, online)
 		}
 	}
 	if online {
@@ -127,11 +134,4 @@ func doctor(c config, out io.Writer) error {
 		return fmt.Errorf("doctor found %d failed checks; resolve the FAIL lines and rerun", failures)
 	}
 	return nil
-}
-
-func diagnosticHint(err error, hint string) string {
-	if err != nil {
-		return " failed" + hint
-	}
-	return " passed"
 }
