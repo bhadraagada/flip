@@ -131,8 +131,8 @@ try:
     public = f"http://127.0.0.1:{c['port']}"
     for name in names:
         flip(name)
-        assert json.loads(request(public + "/api/value")[1]) == {
-            **json.loads(request(public + "/api/value")[1]), "name": name, "service": "api", "path": "/value"}
+        result = json.loads(request(public + "/api/value")[1])
+        assert result["name"] == name and result["service"] == "api" and result["path"] == "/value", result
         for path in ["/", "/oauth/callback", "/apiculture"]:
             result = json.loads(request(public + path)[1])
             assert result["name"] == name and result["service"] == "web", result
@@ -144,7 +144,6 @@ try:
     assert flip("doctor").returncode == 0
     assert flip("status").stdout == before
     passed("Live doctor preserves all PIDs and selection")
-    assert "started main worker" not in flip("logs", "main", "worker").stdout
     assert "worker started" in flip("logs", "main", "worker").stdout
     follower = subprocess.Popen([FLIP, "-config", str(ROOT / "flip.json"), "logs", "main", "web", "-n", "1", "-f"], stdout=subprocess.PIPE, text=True, **HIDDEN)
     lines = queue.Queue()

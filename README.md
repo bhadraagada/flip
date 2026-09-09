@@ -155,6 +155,8 @@ The picker runs on the loopback control port, separate from app traffic. Its sin
 
 ## Checks
 
+For logs, diagnostics and picker authentication, build a local binary and run `py test_experience.py --flip ./flip.exe` or use `python3` and `./flip` on Unix. It needs Git and Node, creates five disposable worktrees under `work/`, and checks CLI log following across restarts, shared and parallel routing, read-only diagnostics, failed switching and scoped browser authentication. It never invokes the globally installed Flip binary. Browser UI checks should also cover keyboard switching, the unauthenticated view and startup errors.
+
 ```sh
 go test ./...
 go vet ./...
