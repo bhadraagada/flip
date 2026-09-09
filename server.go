@@ -200,7 +200,12 @@ func (m *manager) close() {
 }
 
 func control(m *manager, token string) http.Handler {
+	picker := newPicker(m)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/picker") {
+			picker.ServeHTTP(w, r)
+			return
+		}
 		if r.Method != "POST" || r.Header.Get("Origin") != "" || subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+token)) != 1 {
 			http.Error(w, "unauthorized", 403)
 			return
@@ -212,7 +217,18 @@ func control(m *manager, token string) http.Handler {
 			http.Error(w, "invalid request", 400)
 			return
 		}
-		out, err := m.command(req.Action, req.Name, req.Part)
+		if req.Action == "inspect" {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(m.previewState())
+			return
+		}
+		var out string
+		var err error
+		if req.Action == "picker" {
+			out, err = picker.link()
+		} else {
+			out, err = m.command(req.Action, req.Name, req.Part)
+		}
 		if err != nil {
 			http.Error(w, err.Error(), 400)
 			return
