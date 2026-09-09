@@ -155,7 +155,7 @@ func TestDetachedSupervisor(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, ".flip", "token")); !os.IsNotExist(err) {
 		t.Fatal("token survived stop", err)
 	}
-	for _, port := range []int{c.Port, c.ControlPort, c.Worktrees["one"].UI.Port} {
+	for _, port := range []int{c.Port, c.ControlPort, c.Worktrees["one"].Services["ui"].Port} {
 		l, err := net.Listen("tcp", address(port))
 		if err != nil {
 			t.Fatalf("owned port %d survived shutdown: %v", port, err)
