@@ -56,9 +56,10 @@ type config struct {
 	ControlPort        int                 `json:"control_port"`
 	APIPrefix          string              `json:"api_prefix"`
 	StripPrefix        bool                `json:"strip_api_prefix"`
-	TimeoutSeconds     int                 `json:"timeout_seconds"`
 	IdleTimeoutSeconds int                 `json:"idle_timeout_seconds,omitempty"`
+	TimeoutSeconds     int                 `json:"timeout_seconds"`
 	Worktrees          map[string]worktree `json:"worktrees"`
+	Discover           *discovery          `json:"discover,omitempty"`
 	root               string
 	path               string
 }
@@ -110,6 +111,10 @@ func serviceNames(w worktree) []string {
 }
 
 func readConfig(path string) (config, error) {
+	return readConfigMode(path, true)
+}
+
+func readConfigMode(path string, allocate bool) (config, error) {
 	c := config{Port: 8080, ControlPort: 18080, APIPrefix: "/api", TimeoutSeconds: 30}
 	f, err := os.Open(path)
 	if err != nil {
@@ -121,17 +126,29 @@ func readConfig(path string) (config, error) {
 	if err = d.Decode(&c); err != nil {
 		return c, err
 	}
-	c.root, err = filepath.Abs(filepath.Dir(path))
+	c.path, err = canonicalPath(path)
 	if err != nil {
 		return c, err
 	}
-	c.path, err = filepath.Abs(path)
-	if err != nil {
-		return c, err
+	c.root = filepath.Dir(c.path)
+	if c.Discover == nil {
+		return validateConfig(c)
 	}
+	err = withStateMode(func(state *savedState) error {
+		if err := expandDiscovery(&c, state, allocate); err != nil {
+			return err
+		}
+		c, err = validateConfig(c)
+		return err
+	}, allocate)
+	return c, err
+}
+
+func validateConfig(c config) (config, error) {
 	if c.IdleTimeoutSeconds < 0 {
 		return c, fmt.Errorf("idle_timeout_seconds must be nonnegative")
 	}
+	var err error
 	ports := map[int]bool{}
 	checkPort := func(p int) error {
 		if p < 1 || p > 65535 || ports[p] {
