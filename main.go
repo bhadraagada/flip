@@ -17,13 +17,10 @@ func main() {
 }
 func run(args []string) error {
 	f := flag.NewFlagSet("flip", flag.ContinueOnError)
-	defaultConfig := os.Getenv("FLIP_CONFIG")
-	if defaultConfig == "" {
-		defaultConfig = "flip.json"
-	}
-	path := f.String("config", defaultConfig, "configuration file; defaults to FLIP_CONFIG or flip.json")
+	path := f.String("config", "", "configuration file")
+	project := f.String("project", "", "registered project name")
 	f.Usage = func() {
-		fmt.Println("Flip — one address, several worktrees.\n\nflip [-config path] <name>\nflip [-config path] init|serve|status|doctor|picker\nflip [-config path] supervisor status|stop\nflip [-config path] up|use|down <name>\nflip [-config path] restart <name> <service>\nflip [-config path] logs NAME SERVICE [-n 100] [-f]\n\nflip <name> is shorthand for flip use <name>. Services follow restart_on_use.\nConfig: -config, then FLIP_CONFIG, then flip.json in the current directory.")
+		fmt.Println("Flip — one address, several worktrees.\n\nflip [-config path] <name>\nflip [-config path] init|serve|status|discover|doctor|picker\nflip [-config path] supervisor status|stop\nflip [-config path] logs NAME SERVICE [-n 100] [-f]\nflip [-config path] up|use|down <name>\nflip [-config path] restart <name> <service>\nflip [-config path] register <project>\nflip projects|unregister <project>\nflip -project <project> <command>\n\nflip <name> is shorthand for flip use <name>. Services follow restart_on_use.\nConfig: -config, -project, FLIP_CONFIG, ancestor flip.json, then registered Git repository or main checkout flip.json.")
 	}
 	if err := f.Parse(args); err != nil {
 		if err == flag.ErrHelp {
@@ -41,7 +38,23 @@ func run(args []string) error {
 		return err
 	}
 	action := a[0]
+	if action == "projects" || action == "unregister" {
+		name := ""
+		if len(a) > 1 {
+			name = a[1]
+		}
+		return projectCommand(action, name, "")
+	}
 	if action == "init" {
+		if *project != "" {
+			return fmt.Errorf("init requires -config PATH or the current directory; -project selects existing configs")
+		}
+		if *path == "" {
+			*path = os.Getenv("FLIP_CONFIG")
+		}
+		if *path == "" {
+			*path = "flip.json"
+		}
 		f, err := os.OpenFile(*path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 		if err != nil {
 			return err
@@ -57,7 +70,14 @@ func run(args []string) error {
 		fmt.Println("Created", *path, "— edit worktree paths and commands, then run flip NAME.")
 		return nil
 	}
-	c, err := readConfig(*path)
+	*path, err = resolveConfig(*path, *project)
+	if err != nil {
+		return err
+	}
+	if action == "register" {
+		return projectCommand(action, a[1], *path)
+	}
+	c, err := readConfigMode(*path, action != "doctor" && action != "logs")
 	if err != nil {
 		if action == "doctor" {
 			return fmt.Errorf("config check failed; fix %s before starting Flip: %w", *path, err)
@@ -74,6 +94,9 @@ func run(args []string) error {
 	}
 	if action == "serve" {
 		return serve(c)
+	}
+	if action == "discover" {
+		return printDiscovery(c)
 	}
 	name, part := "", ""
 	if len(a) > 1 {
@@ -119,7 +142,7 @@ func normalizeCommand(args []string) ([]string, error) {
 	if args[0] == "logs" && len(args) >= 3 {
 		return args, nil
 	}
-	expected := map[string]int{"init": 1, "serve": 1, "status": 1, "doctor": 1, "picker": 1, "up": 2, "use": 2, "down": 2, "restart": 3, "supervisor": 2}
+	expected := map[string]int{"init": 1, "serve": 1, "status": 1, "doctor": 1, "picker": 1, "up": 2, "use": 2, "down": 2, "restart": 3, "supervisor": 2, "register": 2, "unregister": 2, "projects": 1, "discover": 1}
 	n, known := expected[args[0]]
 	if !known && len(args) == 1 {
 		return []string{"use", args[0]}, nil

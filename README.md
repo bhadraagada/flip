@@ -40,11 +40,11 @@ From the same directory:
 
 To install `flip` on your Go binary path, run `go install .`. With that directory on PATH, use `flip main` as shorthand for `flip use main`. Existing commands such as `flip status` still work; use `flip use status` if a worktree has a reserved command name.
 
-On Linux/macOS, build with `go build -o flip .` and use `./flip`. Config lookup uses `-config`, then the `FLIP_CONFIG` environment variable, then `flip.json` in the current directory. Set `FLIP_CONFIG` to an absolute config path to use Flip from any directory. Put flags before the command.
+On Linux/macOS, build with `go build -o flip .` and use `./flip`. Config lookup uses `-config`, then `-project`, then `FLIP_CONFIG`, then the nearest ancestor `flip.json`. From a linked Git worktree with no local config, Flip checks registered configs in the same repository, then the main checkout's `flip.json`. Multiple registered configs require an explicit `-project`. Put flags before the command.
 
 ## Configuration
 
-`init` writes an example without overwriting existing files. Edit it before starting your first preview. Add another entry under `worktrees` for each existing checkout; Flip does not create Git worktrees.
+`init` writes an example without overwriting existing files. Edit it before starting your first preview. Add an entry under `worktrees` for each checkout, or use the discovery template below. Flip does not create Git worktrees.
 
 - Paths are relative to the config file. Each service has its own working directory.
 - Commands are argument arrays, executed directly without a shell. `{port}` expands to that service's configured port. Use an explicit Python executable such as `.venv/Scripts/python.exe` when needed.
@@ -62,6 +62,51 @@ Each service accepts `restart_on_use`. Set it to `false` for a server that alrea
 
 For example, an existing Go HTTP application that reads `PORT` can use a backend service with `command: ["go", "run", "."]`, `env: {"PORT": "{port}"}`, and `restart_on_use: true`. A Node application can use `["node", "server.js"]` with the same environment convention. Use the flags or environment variables your own application actually supports.
 
+## Project registration and worktree discovery
+
+Register a config once to operate from any directory:
+
+```sh
+flip -config /path/to/project/flip.json register my-app
+flip projects
+flip -project my-app discover
+flip -project my-app serve
+# In another terminal:
+flip -project my-app up feature-a
+flip unregister my-app
+```
+
+Registration saves the absolute config path. `projects` marks missing configs as unavailable; `unregister` removes the name without stopping anything. A missing config can be replaced by registering the name again. An existing registration cannot be silently redirected to another existing config. `init` always writes to `-config`, `FLIP_CONFIG`, or the current directory, even when an ancestor config exists.
+
+Use one service template for every existing Git worktree:
+
+```json
+{
+  "port": 8080,
+  "control_port": 18080,
+  "discover": {
+    "repo": ".",
+    "preview": true,
+    "port_min": 20000,
+    "port_max": 40000,
+    "services": {
+      "web": {
+        "dir": ".",
+        "command": ["your-dev-server", "--port", "{port}"],
+        "health": "/"
+      }
+    }
+  }
+}
+```
+
+`repo` is relative to the config. Service directories are relative to each discovered worktree and must stay inside it. Replace the placeholder command with the app's real command. HTTP service ports must be omitted in the template; Flip assigns them. Worker services retain port zero. The template accepts the same `routes` as a named-service worktree. Set `preview: true` to allocate an additional fixed preview port for each worktree; the default is false.
+
+`flip discover` prints names, service ports, preview ports and directories without starting servers. Names come from checkout directory names, with punctuation replaced by hyphens. Duplicate names get path-derived suffixes. Explicit `worktrees` entries with a discovered name replace that whole generated entry, retaining their configured ports and config-relative directories. Other explicit entries also remain available. Legacy `ui` and `backend` configurations still work.
+
+New assignments skip listening ports and saved assignments from other configs. Existing assignments remain unchanged across commands and supervisor restarts, including while services are running. If another process later occupies a saved port, startup fails; Flip does not move a running preview to another port or stop the other process. An unrelated process can still claim a port between allocation and startup. Startup checks and bind errors detect this race. Explicit conflicts with saved assignments fail with an error.
+
+Registrations and port assignments live in the OS user config directory under `flip/state.json`, or in `FLIP_HOME` when set. Updates use a process lock and replace the state file only after config validation succeeds. Deleted or prunable Git worktrees are skipped, and their saved assignments are dropped on the next discovery. Allocations belonging to deleted config files are reclaimed during allocation. A running supervisor keeps its startup snapshot, so stop it before removing worktrees or editing config, then restart it to discover additions. Keep `FLIP_HOME` stable across terminals and outside version control.
 ## Named services and preview contract
 
 Each worktree may use `services: {"web": {...}, "api": {...}}` instead of legacy `ui`/`backend`. Mixing these forms in one worktree is rejected. Services retain `dir`, `command`, `port`, `health`, `env`, and `restart_on_use`. `type` defaults to `http`; named services default `restart_on_use` to false. Legacy `ui` and `backend` keep their existing defaults and routing.
@@ -110,6 +155,10 @@ Forwarded headers describe the public request. Flip preserves its Host header. C
 | `serve` | Runs the supervisor in the foreground for debugging. Ctrl+C stops its owned services. |
 | `supervisor status` | Reports the authenticated supervisor PID without starting it. |
 | `supervisor stop` | Stops the supervisor and all its owned services, then waits for cleanup. |
+| `discover` | Lists discovered worktrees and saves stable port assignments without starting services. |
+| `register NAME` | Saves the resolved config under a project name. |
+| `projects` | Lists project registrations and unavailable configs. |
+| `unregister NAME` | Removes a project name. |
 | `up NAME` | Starts missing enabled services, waits for startup, and publishes its optional worktree preview. Keeps shared selection and running processes. |
 | `use NAME` | Starts configured services, restarts those with restart_on_use enabled, then selects the worktree. |
 | `restart NAME SERVICE` | Restarts one enabled named service, retaining selection. Legacy `ui` and `backend` still work. |
@@ -162,6 +211,9 @@ go test ./...
 go vet ./...
 ```
 
+Discovery checks create five real Git worktrees, exercise concurrent processes, occupied ports, stable assignments, explicit overrides and stale registrations. For a live CLI check using only Git and Python, build a local binary and run `python test_discovery.py /path/to/flip`. It checks five fixed preview URLs, shared switching, supervisor restart and cleanup without using port 8080.
+
+Tests launch real child HTTP servers and check switching, backend restart, failed-start selection, port collisions, process cleanup, callback routing, API boundaries, prefix stripping, upgraded socket traffic and control authentication.
 Tests launch real HTTP servers and workers, verify named services, independent previews, disabled workers, immediate worker exits, config validation, and check switching, backend restart, failed-start selection, port collisions, process cleanup, callback routing, API boundaries, prefix stripping, upgraded socket traffic and control authentication.
 
 `TestDetachedSupervisor` builds a temporary CLI, or uses `FLIP_TEST_BINARY` when set, and launches separate CLI processes to check concurrent startup, stale tokens, streaming/socket idle protection, readiness timeouts and shutdown cleanup.
