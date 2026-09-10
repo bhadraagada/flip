@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"crypto/rand"
@@ -13,13 +13,13 @@ import (
 	"time"
 )
 
-//go:embed picker.html
+//go:embed web/picker.html
 var pickerHTML string
 
-//go:embed picker.js
+//go:embed web/picker.js
 var pickerJS string
 
-//go:embed picker.css
+//go:embed web/picker.css
 var pickerCSS string
 
 type serviceView struct {

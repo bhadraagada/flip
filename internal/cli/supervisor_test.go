@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"bufio"
@@ -53,7 +53,7 @@ func TestDetachedSupervisor(t *testing.T) {
 		if runtime.GOOS == "windows" {
 			bin += ".exe"
 		}
-		if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+		if out, err := exec.Command("go", "build", "-o", bin, "../..").CombinedOutput(); err != nil {
 			t.Fatalf("build: %s: %v", out, err)
 		}
 	}

@@ -1,5 +1,5 @@
 """Five disposable Git worktrees. Requires Git, Node and a worktree-local Flip build.
-Run: py test_experience.py --flip ./flip.exe
+Run: py tests/integration/test_experience.py --flip ./flip.exe
 """
 import argparse
 import json
@@ -21,7 +21,7 @@ args = parser.parse_args()
 FLIP = str(Path(args.flip).resolve())
 NODE = shutil.which("node")
 assert NODE, "Node must be installed"
-scratch = Path(__file__).resolve().parent / "work"
+scratch = Path(__file__).resolve().parents[2] / "work"
 scratch.mkdir(exist_ok=True)
 ROOT = Path(tempfile.mkdtemp(prefix="experience-", dir=scratch))
 ENV = dict(os.environ, FLIP_HOME=str(ROOT / "state"), FLIP_CONFIG="")

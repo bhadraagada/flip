@@ -1,4 +1,4 @@
-"""Live named-service CLI check. Run: python test_services.py PATH_TO_LOCAL_FLIP_BINARY.
+"""Live named-service CLI check. Run: python tests/integration/test_services.py PATH_TO_LOCAL_FLIP_BINARY.
 Uses only Python's standard library, Git, and a prebuilt Flip binary.
 """
 from concurrent.futures import ThreadPoolExecutor

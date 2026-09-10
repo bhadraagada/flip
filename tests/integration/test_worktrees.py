@@ -1,6 +1,6 @@
 """Real CLI integration check. Requires git, node, npm, flip, FastAPI and Uvicorn.
 Creates a temporary five-worktree project; retains its files and logs for inspection.
-Run: py test_worktrees.py
+Run: py tests/integration/test_worktrees.py
 """
 import base64
 import json

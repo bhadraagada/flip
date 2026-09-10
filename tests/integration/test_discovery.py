@@ -1,4 +1,4 @@
-"""Live discovery check. Run: python test_discovery.py /path/to/worktree-local/flip
+"""Live discovery check. Run: python tests/integration/test_discovery.py /path/to/worktree-local/flip
 
 Uses only Python's standard library, Git and the supplied Flip binary.
 Creates five disposable Git worktrees and stops only the processes it starts.
@@ -17,7 +17,7 @@ import urllib.request
 
 def main():
     binary = Path(sys.argv[1]).resolve(strict=True)
-    scratch = Path(__file__).resolve().parent / ".flip"
+    scratch = Path(__file__).resolve().parents[2] / ".flip"
     scratch.mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="discovery-", dir=scratch) as temporary:
         root = Path(temporary)
