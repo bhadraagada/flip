@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"time"
 )
 
@@ -18,7 +20,7 @@ func run(args []string) error {
 	path := f.String("config", "", "configuration file")
 	project := f.String("project", "", "registered project name")
 	f.Usage = func() {
-		fmt.Println("Flip — one address, several worktrees.\n\nflip [-config path] <name>\nflip [-config path] init|serve|status|discover\nflip [-config path] supervisor status|stop\nflip [-config path] up|use|down <name>\nflip [-config path] restart <name> <service>\nflip [-config path] register <project>\nflip projects|unregister <project>\nflip -project <project> <command>\n\nflip <name> is shorthand for flip use <name>. Services follow restart_on_use.\nConfig: -config, -project, FLIP_CONFIG, ancestor flip.json, then registered Git repository or main checkout flip.json.")
+		fmt.Println("Flip — one address, several worktrees.\n\nflip [-config path] <name>\nflip [-config path] init|serve|status|discover|doctor|picker\nflip [-config path] supervisor status|stop\nflip [-config path] logs NAME SERVICE [-n 100] [-f]\nflip [-config path] up|use|down <name>\nflip [-config path] restart <name> <service>\nflip [-config path] register <project>\nflip projects|unregister <project>\nflip -project <project> <command>\n\nflip <name> is shorthand for flip use <name>. Services follow restart_on_use.\nConfig: -config, -project, FLIP_CONFIG, ancestor flip.json, then registered Git repository or main checkout flip.json.")
 	}
 	if err := f.Parse(args); err != nil {
 		if err == flag.ErrHelp {
@@ -75,9 +77,20 @@ func run(args []string) error {
 	if action == "register" {
 		return projectCommand(action, a[1], *path)
 	}
-	c, err := readConfig(*path)
+	c, err := readConfigMode(*path, action != "doctor" && action != "logs")
 	if err != nil {
+		if action == "doctor" {
+			return fmt.Errorf("config check failed; fix %s before starting Flip: %w", *path, err)
+		}
 		return err
+	}
+	if action == "logs" {
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer cancel()
+		return logs(ctx, c, a[1:], os.Stdout)
+	}
+	if action == "doctor" {
+		return doctor(c, os.Stdout)
 	}
 	if action == "serve" {
 		return serve(c)
@@ -126,7 +139,10 @@ func normalizeCommand(args []string) ([]string, error) {
 	if len(args) == 0 {
 		return nil, fmt.Errorf("missing command; run flip -h")
 	}
-	expected := map[string]int{"init": 1, "serve": 1, "status": 1, "up": 2, "use": 2, "down": 2, "restart": 3, "register": 2, "unregister": 2, "projects": 1, "discover": 1, "supervisor": 2}
+	if args[0] == "logs" && len(args) >= 3 {
+		return args, nil
+	}
+	expected := map[string]int{"init": 1, "serve": 1, "status": 1, "doctor": 1, "picker": 1, "logs": 3, "up": 2, "use": 2, "down": 2, "restart": 3, "supervisor": 2, "register": 2, "unregister": 2, "projects": 1, "discover": 1}
 	n, known := expected[args[0]]
 	if !known && len(args) == 1 {
 		return []string{"use", args[0]}, nil

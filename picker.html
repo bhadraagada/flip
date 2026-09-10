@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Flip · Preview desk</title><link rel="stylesheet" href="/picker.css"><script src="/picker.js" defer></script></head>
+<body><main>
+<header><a class="wordmark" href="/picker" aria-label="Flip preview desk">flip<span aria-hidden="true">↗</span></a><span class="eyebrow">LOCAL / PREVIEW DESK</span></header>
+<section class="intro"><p class="eyebrow">YOUR WORK, SIDE BY SIDE</p><h1>Pick up where<br>you branched off.</h1><p>Switch the shared preview or open a worktree's own address.</p></section>
+<section class="shared" aria-labelledby="shared-label"><div><p class="eyebrow" id="shared-label">SHARED PREVIEW</p><p id="selection">No worktree selected</p></div><a id="shared-link" hidden target="_blank" rel="noopener noreferrer">Open preview ↗</a></section>
+<div class="toolbar"><h2>Worktrees <span id="count"></span></h2><button id="refresh" type="button" disabled>Refresh status</button></div>
+<p id="message" role="status" aria-live="polite">Run flip picker in your terminal, then open its login link.</p>
+<div id="worktrees" aria-busy="false"></div>
+<footer>Switching changes the shared address for every tab. Refresh app tabs after switching. <span>Status is a snapshot. Use Refresh status to check again.</span></footer>
+</main></body></html>

@@ -163,6 +163,9 @@ Forwarded headers describe the public request. Flip preserves its Host header. C
 | `restart NAME SERVICE` | Restarts one enabled named service, retaining selection. Legacy `ui` and `backend` still work. |
 | `down NAME` | Stops owned services and clears its preview. Clears shared selection if active. |
 | `status` | Lists each service, state, PID, selection and configured preview URL. It is not a continuous health monitor. |
+| `logs NAME SERVICE [-n 100] [-f]` | Prints recent service output; `-f` follows appended output until Ctrl+C, including across service restarts. Works without the supervisor. |
+| `doctor` | Validates config and commands, checks ports and running services' readiness, and reports routing without starting, stopping or waking apps. Failed checks exit nonzero with a suggested fix. |
+| `picker` | Prints a temporary login link to the local preview picker on the control port. Requires a running supervisor. |
 
 If a target fails to start, the previous selection remains. Services that started successfully may stay running after a later service fails; `down` cleans it up. Restarting the selected backend creates a short outage. For services without automatic reload, edits require `restart` or another `use` with restart_on_use enabled.
 
@@ -186,9 +189,21 @@ The supervisor is an ordinary detached process, not an installed OS service. It 
 
 All browser tabs on 8080 share the selection. Refresh them after switching; existing requests and sockets are not migrated. Finish login and active operations before switching. Cookies, local storage, databases, queues and scheduled jobs are not isolated by worktrees. Separate their configuration when branches could conflict.
 
-The control listener defaults to 127.0.0.1:18080 and requires a random token in `.flip/token`. Browser-origin requests are rejected. Keep `.flip` private and outside your frontend's served directory. Windows file access follows the containing directory's ACL. Do not commit tokens or environment secrets.
+The control listener defaults to 127.0.0.1:18080 and requires a random token in `.flip/token`. Browser-origin requests to the CLI control API are rejected. Keep `.flip` private and outside your frontend's served directory. Windows file access follows the containing directory's ACL. Do not commit tokens or environment secrets.
+
+## Logs, diagnostics and preview picker
+
+Run `flip logs main web -n 50 -f` to see the last 50 lines and follow new output. Substitute a configured service name, including `ui`, `backend` or a worker. Put log flags after the name and service. `-n 0 -f` starts with new output only. Flip appends to the same log across restarts; external log rotation is not followed. Log names are resolved from validated config entries.
+
+`flip doctor` checks executable lookup without executing commands. It checks internal HTTP health routes only when the authenticated supervisor reports the service running. Stopped services get a port check and a skipped readiness check. Workers have no HTTP health probe, and disabled services are skipped. Routes are inspected without requesting a preview URL. Direct readiness probes do not reset Flip's idle timer. With discovery enabled, doctor and logs reuse saved assignments; run `flip discover` first if new worktrees need ports. An unavailable supervisor is reported with instructions for enabling live checks. Fix configuration errors before rerunning diagnosis.
+
+Run `flip picker` and open the printed URL within one minute. The picker lists configured worktrees and service states, shows the selected shared preview, and links to each configured parallel preview. Select a worktree to run the same operation as `flip use NAME`, including its restart policy. A failed switch displays the error and retains the previous selection. Status is a snapshot; use Refresh status for an update.
+
+The picker runs on the loopback control port, separate from app traffic. Its single-use login grant is in the URL fragment and is removed from browser history when processed. Treat the printed link as private. It is exchanged for a one-hour browser credential stored only in that tab's session storage. This credential permits status and switching, never general supervisor control. The page never receives `.flip/token`, sends no cookies, loads no external resources, and blocks framing. Picker API requests require an exact local Host, same-origin Origin, JSON content type and the scoped bearer credential. Restarting the supervisor invalidates all picker sessions. Reopening the picker after expiry requires a fresh `flip picker` link.
 
 ## Checks
+
+For logs, diagnostics and picker authentication, build a local binary and run `py test_experience.py --flip ./flip.exe` or use `python3` and `./flip` on Unix. It needs Git and Node, creates five disposable worktrees under `work/`, and checks CLI log following across restarts, shared and parallel routing, read-only diagnostics, failed switching and scoped browser authentication. It never invokes the globally installed Flip binary. Browser UI checks should also cover keyboard switching, the unauthenticated view and startup errors.
 
 ```sh
 go test ./...

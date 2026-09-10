@@ -1,6 +1,7 @@
 /flip
 /flip.exe
 /.flip/
+/work/
 /flip.json
 __pycache__/
 .env
