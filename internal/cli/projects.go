@@ -109,6 +109,7 @@ func gitOutput(dir string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+	hideWindow(cmd)
 	b, err := cmd.Output()
 	if err != nil {
 		if e, ok := err.(*exec.ExitError); ok {

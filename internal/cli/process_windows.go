@@ -19,6 +19,14 @@ func detach(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x00000008 | 0x00000200} // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
 }
 
+func hideWindow(cmd *exec.Cmd) {
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.HideWindow = true
+	cmd.SysProcAttr.CreationFlags |= 0x08000000 // CREATE_NO_WINDOW: no console to flash for background commands.
+}
+
 func lockFile(f *os.File) error {
 	var overlapped syscall.Overlapped
 	ok, _, err := kernel.NewProc("LockFileEx").Call(f.Fd(), 0x3, 0, 1, 0, uintptr(unsafe.Pointer(&overlapped)))
@@ -53,7 +61,7 @@ func launch(cmd *exec.Cmd) (func() error, error) {
 		closeJob()
 		return nil, err
 	}
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	hideWindow(cmd)
 	if err := cmd.Start(); err != nil {
 		closeJob()
 		return nil, err

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -23,12 +22,12 @@ type discovery struct {
 }
 
 func gitWorktrees(repo string) ([]string, error) {
-	b, err := exec.Command("git", "-C", repo, "worktree", "list", "--porcelain", "-z").Output()
+	b, err := gitOutput(repo, "worktree", "list", "--porcelain", "-z")
 	if err != nil {
 		return nil, fmt.Errorf("discover Git worktrees: %w", err)
 	}
 	var paths []string
-	for _, record := range strings.Split(string(b), "\x00\x00") {
+	for _, record := range strings.Split(b, "\x00\x00") {
 		fields := strings.Split(record, "\x00")
 		path, skip := "", false
 		for _, field := range fields {
