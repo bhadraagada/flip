@@ -73,13 +73,22 @@ func TestDiscoveryFiveWorktrees(t *testing.T) {
 	paths := fixtureGit(t, root, 5)
 	file := filepath.Join(paths[0], "flip.json")
 	c := discoveryFixtureConfig(t, ".")
-	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	// Stay below the OS ephemeral range: readiness clients can otherwise claim
+	// a just-allocated service port before its process starts on Windows.
+	var occupied net.Listener
+	var err error
+	for port := 20000; port < 30000; port++ {
+		occupied, err = net.Listen("tcp", address(port))
+		if err == nil {
+			break
+		}
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer occupied.Close()
 	c.Discover.PortMin = occupied.Addr().(*net.TCPAddr).Port
-	c.Discover.PortMax = 65535
+	c.Discover.PortMax = 30000
 	writeDiscoveryConfig(t, file, c)
 	// Read-only diagnostics neither allocate nor create state.
 	if _, err := readConfigMode(file, false); err == nil {
