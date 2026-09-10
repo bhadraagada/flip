@@ -27,13 +27,16 @@ type serviceView struct {
 	Port         int
 }
 type worktreeView struct {
-	Name, URL string
-	Selected  bool
-	Services  []serviceView
+	Name, URL    string
+	Branch       string
+	LastActivity int64
+	Selected     bool
+	Services     []serviceView
 }
 type previewState struct {
 	URL       string
 	Worktrees []worktreeView
+	Branches  []branchView
 }
 
 func (m *manager) previewState() previewState {
@@ -45,9 +48,21 @@ func (m *manager) previewState() previewState {
 		names = append(names, name)
 	}
 	sort.Strings(names)
+	roots := map[string]string{}
 	for _, name := range names {
 		w := m.c.Worktrees[name]
 		row := worktreeView{Name: name, Services: []serviceView{}}
+		root := worktreeRoot(w)
+		if root != "" {
+			roots[name] = root
+		}
+		if a := m.activity[name]; a != nil {
+			a.mu.Lock()
+			if a.last.Unix() > row.LastActivity {
+				row.LastActivity = a.last.Unix()
+			}
+			a.mu.Unlock()
+		}
 		if a := m.active.Load(); a != nil {
 			row.Selected = a.name == name
 		}
@@ -64,6 +79,27 @@ func (m *manager) previewState() previewState {
 		}
 		state.Worktrees = append(state.Worktrees, row)
 	}
+	// Independent Git scans keep a project with many worktrees responsive.
+	var scans sync.WaitGroup
+	for i := range state.Worktrees {
+		scans.Go(func() {
+			row := &state.Worktrees[i]
+			branch, last := gitActivity(roots[row.Name])
+			row.Branch = branch
+			if last > row.LastActivity {
+				row.LastActivity = last
+			}
+		})
+	}
+	scans.Wait()
+	sort.SliceStable(state.Worktrees, func(i, j int) bool {
+		a, b := state.Worktrees[i], state.Worktrees[j]
+		if a.Selected != b.Selected {
+			return a.Selected
+		}
+		return a.LastActivity > b.LastActivity
+	})
+	state.Branches = branchList(roots)
 	return state
 }
 
@@ -172,13 +208,13 @@ func (p *picker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Session expired. Run flip picker for a new link.", 403)
 		return
 	}
-	if req.Action == "use" {
-		if _, err := p.m.command("use", req.Name, ""); err != nil {
+	if req.Action == "use" || req.Action == "branch" {
+		if _, err := p.m.command(req.Action, req.Name, ""); err != nil {
 			http.Error(w, err.Error(), 400)
 			return
 		}
 	} else if req.Action != "status" {
-		http.Error(w, "picker supports status and use only", 400)
+		http.Error(w, "picker supports status, use and branch only", 400)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

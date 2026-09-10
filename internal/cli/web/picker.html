@@ -1,12 +1,89 @@
 <!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>Flip · Worktrees</title><link rel="stylesheet" href="/picker.css"><script src="/picker.js" defer></script></head>
-<body><main>
-<header><a class="wordmark" href="/picker" aria-label="Flip preview desk"><span class="mark" aria-hidden="true">f/</span>flip</a><span class="local">Local workspace</span></header>
-<section class="intro"><div><p class="eyebrow">PREVIEW CONTROL</p><h1>Your work, in focus.</h1><p>One address. Any branch.</p></div><div class="overview"><strong id="running-count">—</strong><span>worktrees running</span></div></section>
-<section class="shared" aria-labelledby="shared-label"><div><p class="eyebrow" id="shared-label">SHARED PREVIEW</p><p id="selection">No worktree selected</p></div><a id="shared-link" hidden target="_blank" rel="noopener noreferrer">Open preview ↗</a></section>
-<div class="toolbar"><h2>Worktrees <span id="count"></span></h2><div class="tools"><label class="search"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="Find a worktree…" aria-label="Find a worktree" autocomplete="off"></label><button id="refresh" type="button" disabled>↻ Refresh</button></div></div>
+<body><!--
+ISC License
+
+Copyright (c) 2026 Lucide Icons and Contributors
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+---
+
+The following Lucide icons are derived from the Feather project:
+
+airplay, alert-circle, alert-octagon, alert-triangle, aperture, arrow-down-circle, arrow-down-left, arrow-down-right, arrow-down, arrow-left-circle, arrow-left, arrow-right-circle, arrow-right, arrow-up-circle, arrow-up-left, arrow-up-right, arrow-up, at-sign, calendar, cast, check, chevron-down, chevron-left, chevron-right, chevron-up, chevrons-down, chevrons-left, chevrons-right, chevrons-up, circle, clipboard, clock, code, columns, command, compass, corner-down-left, corner-down-right, corner-left-down, corner-left-up, corner-right-down, corner-right-up, corner-up-left, corner-up-right, crosshair, database, divide-circle, divide-square, dollar-sign, download, external-link, feather, frown, hash, headphones, help-circle, info, italic, key, layout, life-buoy, link-2, link, loader, lock, log-in, log-out, maximize, meh, minimize, minimize-2, minus-circle, minus-square, minus, monitor, moon, more-horizontal, more-vertical, move, music, navigation-2, navigation, octagon, pause-circle, percent, plus-circle, plus-square, plus, power, radio, rss, search, server, share, shopping-bag, sidebar, smartphone, smile, square, table-2, tablet, target, terminal, trash-2, trash, triangle, tv, type, upload, x-circle, x-octagon, x-square, x, zoom-in, zoom-out
+
+The MIT License (MIT) (for the icons listed above)
+
+Copyright (c) 2013-present Cole Bemis
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+--><svg xmlns="http://www.w3.org/2000/svg" class="icon-definitions" aria-hidden="true"><defs><symbol id="icon-git-branch" viewBox="0 0 24 24">
+  <path d="M15 6a9 9 0 0 0-9 9V3" />
+  <circle cx="18" cy="6" r="3" />
+  <circle cx="6" cy="18" r="3" />
+</symbol><symbol id="icon-layers" viewBox="0 0 24 24">
+  <path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z" />
+  <path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12" />
+  <path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17" />
+</symbol><symbol id="icon-search" viewBox="0 0 24 24">
+  <path d="m21 21-4.34-4.34" />
+  <circle cx="11" cy="11" r="8" />
+</symbol><symbol id="icon-refresh-cw" viewBox="0 0 24 24">
+  <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+  <path d="M21 3v5h-5" />
+  <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+  <path d="M8 16H3v5" />
+</symbol><symbol id="icon-arrow-right" viewBox="0 0 24 24">
+  <path d="M5 12h14" />
+  <path d="m12 5 7 7-7 7" />
+</symbol><symbol id="icon-arrow-up-right" viewBox="0 0 24 24">
+  <path d="M7 7h10v10" />
+  <path d="M7 17 17 7" />
+</symbol><symbol id="icon-check" viewBox="0 0 24 24">
+  <path d="M20 6 9 17l-5-5" />
+</symbol><symbol id="icon-clock" viewBox="0 0 24 24">
+  <circle cx="12" cy="12" r="10" />
+  <path d="M12 6v6l4 2" />
+</symbol><symbol id="icon-plus" viewBox="0 0 24 24">
+  <path d="M5 12h14" />
+  <path d="M12 5v14" />
+</symbol></defs></svg><main>
+<header><a class="wordmark" href="/picker" aria-label="Flip"><span class="mark" data-icon="layers" aria-hidden="true"></span>flip<span class="wordmark-detail">/ local</span></a><span class="local"><i class="dot"></i> All systems local</span></header>
+<section class="intro"><div><p class="eyebrow">YOUR DEVELOPMENT DESK</p><h1>Pick up where you left off.</h1></div><div class="overview"><strong id="running-count">0</strong><span>running</span></div></section>
+<section class="shared" aria-labelledby="shared-label"><div class="shared-symbol" data-icon="git-branch" aria-hidden="true"></div><div class="shared-info"><p class="eyebrow" id="shared-label">CURRENT PREVIEW</p><p id="selection">No worktree selected</p></div><a id="shared-link" hidden target="_blank" rel="noopener noreferrer">Open preview</a></section>
+<div class="toolbar"><div class="tabs" aria-label="Workspace type"><button id="trees-tab" type="button" aria-pressed="true"><span data-icon="layers"></span>Worktrees <span id="count" class="count">0</span></button><button id="branches-tab" type="button" aria-pressed="false"><span data-icon="git-branch"></span>Branches <span id="branch-count" class="count">0</span></button></div><div class="tools"><label class="search"><span data-icon="search"></span><input id="search" type="search" placeholder="Find worktrees or branches…" aria-label="Find worktrees or branches" autocomplete="off"></label><button id="refresh" type="button" disabled title="Refresh status" aria-label="Refresh status"><span data-icon="refresh-cw"></span></button></div></div>
+<div class="list-meta"><p id="view-hint">Current preview first, then recent activity</p><span data-icon="clock" aria-hidden="true"></span></div>
 <p id="message" role="status" aria-live="polite">Run flip picker in your terminal, then open its login link.</p>
-<div class="list-head" aria-hidden="true"><span>WORKTREE</span><span>SERVICES</span><span>PREVIEW</span></div><div id="worktrees" aria-busy="false"></div>
-<footer><span>Switching updates the shared preview for all tabs.</span><span>Refresh app tabs after switching. Status updates on refresh.</span></footer>
+<div class="list-head" aria-hidden="true"><span id="name-label">WORKTREE / BRANCH</span><span>SERVICES</span><span>LAST ACTIVE</span><span></span></div><div id="worktrees" aria-busy="false"></div>
+<footer><span>One address. Every branch.</span><span>Switch, then refresh your app. Finish login before switching.</span></footer>
 </main></body></html>

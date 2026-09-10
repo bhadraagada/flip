@@ -233,3 +233,18 @@ Issues and pull requests are welcome. Include reproduction steps for bugs and ru
 ## License
 
 [MIT](../LICENSE).
+
+## Branch switching
+
+```sh
+flip branch feature/login
+flip -project prism branch feature/login
+```
+
+Switches the dev servers and shared preview to an existing **local Git branch**. Flip reuses its configured worktree, registers an existing checkout, or creates one under `.flip/worktrees/` beside the config. Your current checkout and uncommitted edits stay intact. Nothing is fetched or committed.
+
+New entries inherit the selected worktree's service commands, routes, environment and restart policy (otherwise `main`, then the first Git-backed entry). Service directories and absolute command paths inside the source checkout follow the new checkout; HTTP ports are unique and saved in the config. New workers stay disabled and new entries use the fixed shared preview address, keeping OAuth callbacks on the same origin. Branch switching requires a configuration whose services belong to one Git repository.
+
+A new checkout needs its own dependencies and ignored environment files. Flip does not copy `.env`, install packages, run migrations or provision databases. If startup fails, prepare the reported service directories and retry the same command. The previous preview stays selected. Enable `restart_on_use` on services without reload so selecting a branch picks up later code edits.
+
+The picker has **Worktrees** and **Branches** tabs; both switch the running dev servers. The selected preview stays first, followed by recent activity from preview use, local file edits, Git checkout history and commits. Branches without a checkout use their last commit time. Status and activity refresh when you press Refresh; preview usage times reset when the supervisor restarts. Git-ignored files are excluded from edit activity.

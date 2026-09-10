@@ -1,6 +1,6 @@
 # Flip
 
-One browser address for several Git worktrees. Run any HTTP stack, switch previews, and keep each worktree's services separate. Written in Go with no third-party Go dependencies.
+One browser address for your Git branches and worktrees. Run any HTTP stack, switch previews, and keep each worktree's services separate. Written in Go with no third-party Go dependencies.
 
 ## Install
 
@@ -16,6 +16,7 @@ flip main
 The supervisor starts automatically. Flip supports named services, workers, worktree discovery, stable port assignments, parallel previews, configurable restarts and idle shutdown.
 
 ```sh
+flip branch feature/login
 flip status
 flip logs main api -f
 flip doctor
@@ -48,4 +49,4 @@ On Windows, build with `go build -o flip.exe .`. For live checks, see the [integ
 
 Issues and pull requests are welcome. Include reproduction steps and test evidence. Install the [agent skill](skills/flip/SKILL.md) in your agent's skill directory when working with Flip.
 
-[MIT license](LICENSE).
+[MIT license](LICENSE). Picker icons are from [Lucide](https://lucide.dev), under the [included ISC/MIT licenses](docs/lucide-license.txt).

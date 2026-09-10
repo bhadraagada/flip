@@ -32,14 +32,15 @@ type selection struct {
 	routes []proxyRoute
 }
 type manager struct {
-	c         config
-	mu        sync.Mutex // ponytail: serialize lifecycle commands; per-worktree locks if startup contention matters.
-	processes map[string]map[string]*process
-	previews  map[string]*atomic.Pointer[selection]
-	active    atomic.Pointer[selection]
-	ctx       context.Context
-	cancel    context.CancelFunc
-	activity  map[string]*activity
+	c          config
+	mu         sync.Mutex // ponytail: serialize lifecycle commands; per-worktree locks if startup contention matters.
+	registryMu sync.RWMutex
+	processes  map[string]map[string]*process
+	previews   map[string]*atomic.Pointer[selection]
+	active     atomic.Pointer[selection]
+	ctx        context.Context
+	cancel     context.CancelFunc
+	activity   map[string]*activity
 }
 
 func newManager(ctx context.Context, c config) *manager {
@@ -83,7 +84,8 @@ func (m *manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	m.serveSelection(m.active.Load(), w, r)
 }
 func (m *manager) previewHandler(name string) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { m.serveSelection(m.previews[name].Load(), w, r) })
+	preview := m.previews[name]
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { m.serveSelection(preview.Load(), w, r) })
 }
 func (m *manager) serveSelection(a *selection, w http.ResponseWriter, r *http.Request) {
 	host := r.Host
@@ -98,7 +100,9 @@ func (m *manager) serveSelection(a *selection, w http.ResponseWriter, r *http.Re
 		http.Error(w, "No worktree ready. Run flip use <name> for the shared preview or flip up <name> for its own preview.", 503)
 		return
 	}
+	m.registryMu.RLock()
 	activity := m.activity[a.name]
+	m.registryMu.RUnlock()
 	if !activity.begin() {
 		http.Error(w, "Worktree stopped. Run flip use <name>.", 503)
 		return
@@ -113,6 +117,17 @@ func (m *manager) serveSelection(a *selection, w http.ResponseWriter, r *http.Re
 	http.NotFound(w, r)
 }
 func (m *manager) command(action, name, part string) (string, error) {
+	if action == "branch" {
+		target, err := m.prepareBranch(name)
+		if err != nil {
+			return "", err
+		}
+		out, err := m.command("use", target, "")
+		if err != nil {
+			return "", fmt.Errorf("branch %s (%s): %w; check dependencies and environment in its service directories, then retry flip branch %s", name, target, err, name)
+		}
+		return out, nil
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if action == "status" {

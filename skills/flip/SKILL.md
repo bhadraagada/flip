@@ -1,6 +1,6 @@
 ---
 name: flip
-description: Manage local worktree previews with the Flip CLI. Use when asked to start or switch a Flip preview, restart its services after edits, inspect running worktrees, or configure Flip for an existing project.
+description: Manage local branch and worktree previews with the Flip CLI. Use when asked to switch dev servers to a Git branch, start or switch a Flip preview, restart its services after edits, inspect running worktrees, or configure Flip for an existing project.
 ---
 
 # Flip
@@ -30,6 +30,8 @@ On failure, use `flip logs NAME SERVICE -n 100`, or add `-f` to follow appended 
 Use `flip picker` when the user wants a browser view of worktrees, service states and shared or parallel preview links. Open its private login URL within one minute; never paste the grant into reports or logs. The browser receives a temporary picker-only session, never the CLI control token. Selection has the same restart and shared-tab effects as `flip use`. Refresh status to get a new snapshot, and obtain a new login link after expiry or supervisor restart.
 
 ## Routing and completion
+
+Use `flip branch BRANCH` for an existing local Git branch, including names containing `/`. It reuses a checkout or creates and registers one without changing the caller's branch or edits, starts services and selects them after readiness. New entries inherit the active worktree's configuration, receive saved internal ports, use the shared public origin and disable workers. Prepare missing dependencies and ignored environment files in the reported checkout before retrying; a new checkout does not include `.venv`, `node_modules` or `.env`. Absolute command paths within the source checkout are remapped; check custom environment paths and branch-specific requirements. Branch switching requires one Git repository per config. Keep `restart_on_use` enabled for services without reload. The picker's Branches tab invokes this command; its Worktrees tab invokes `use`. The current preview stays first, then recent local activity.
 
 The default browser address is `http://localhost:8080`. UI API calls use `/api`; prefix stripping depends on the backend routes. Keep the existing Google callback URI and its UI path intact. Forward live-reload or application sockets through the public port using the framework's own configuration.
 
