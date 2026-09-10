@@ -70,8 +70,6 @@ Register a config once to operate from any directory:
 flip -config /path/to/project/flip.json register my-app
 flip projects
 flip -project my-app discover
-flip -project my-app serve
-# In another terminal:
 flip -project my-app up feature-a
 flip unregister my-app
 ```
@@ -107,6 +105,7 @@ Use one service template for every existing Git worktree:
 New assignments skip listening ports and saved assignments from other configs. Existing assignments remain unchanged across commands and supervisor restarts, including while services are running. If another process later occupies a saved port, startup fails; Flip does not move a running preview to another port or stop the other process. An unrelated process can still claim a port between allocation and startup. Startup checks and bind errors detect this race. Explicit conflicts with saved assignments fail with an error.
 
 Registrations and port assignments live in the OS user config directory under `flip/state.json`, or in `FLIP_HOME` when set. Updates use a process lock and replace the state file only after config validation succeeds. Deleted or prunable Git worktrees are skipped, and their saved assignments are dropped on the next discovery. Allocations belonging to deleted config files are reclaimed during allocation. A running supervisor keeps its startup snapshot, so stop it before removing worktrees or editing config, then restart it to discover additions. Keep `FLIP_HOME` stable across terminals and outside version control.
+
 ## Named services and preview contract
 
 Each worktree may use `services: {"web": {...}, "api": {...}}` instead of legacy `ui`/`backend`. Mixing these forms in one worktree is rejected. Services retain `dir`, `command`, `port`, `health`, `env`, and `restart_on_use`. `type` defaults to `http`; named services default `restart_on_use` to false. Legacy `ui` and `backend` keep their existing defaults and routing.
@@ -132,7 +131,7 @@ Example named-service worktree entry, with paths and commands adapted to your ap
 }
 ```
 
-Optional `preview_port` on a worktree reserves a unique loopback port when `serve` starts. After `up NAME` or successful `use NAME`, `http://localhost:PREVIEW_PORT` routes to that worktree regardless of the fixed preview selection. `down NAME` makes its preview unavailable. The fixed `port` and `use` behavior stay intact. Ports are explicit and globally unique within the config; automatic assignment is deferred to discovery.
+Optional `preview_port` on a worktree reserves a unique loopback port when the supervisor starts. After `up NAME` or successful `use NAME`, `http://localhost:PREVIEW_PORT` routes to that worktree regardless of the fixed preview selection. `down NAME` makes its preview unavailable. The fixed `port` and `use` behavior stay intact. Ports are unique within the config; the discovery template can assign them automatically.
 
 `restart NAME SERVICE` accepts any configured enabled service name. The existing control request shape, `{Action, Name, Part}`, is unchanged; `Part` is the service name. `status` lists each named service, process state, selection, and optional preview URL. Logs use `.flip/NAME-SERVICE.log`.
 
@@ -152,13 +151,13 @@ Forwarded headers describe the public request. Flip preserves its Host header. C
 
 | Command | Behavior |
 | --- | --- |
-| `serve` | Runs the supervisor in the foreground for debugging. Ctrl+C stops its owned services. |
-| `supervisor status` | Reports the authenticated supervisor PID without starting it. |
-| `supervisor stop` | Stops the supervisor and all its owned services, then waits for cleanup. |
 | `discover` | Lists discovered worktrees and saves stable port assignments without starting services. |
 | `register NAME` | Saves the resolved config under a project name. |
 | `projects` | Lists project registrations and unavailable configs. |
 | `unregister NAME` | Removes a project name. |
+| `serve` | Runs the supervisor in the foreground for debugging. Ctrl+C stops its owned services. |
+| `supervisor status` | Reports the authenticated supervisor PID without starting it. |
+| `supervisor stop` | Stops the supervisor and all its owned services, then waits for cleanup. |
 | `up NAME` | Starts missing enabled services, waits for startup, and publishes its optional worktree preview. Keeps shared selection and running processes. |
 | `use NAME` | Starts configured services, restarts those with restart_on_use enabled, then selects the worktree. |
 | `restart NAME SERVICE` | Restarts one enabled named service, retaining selection. Legacy `ui` and `backend` still work. |
@@ -211,9 +210,8 @@ go test ./...
 go vet ./...
 ```
 
-Discovery checks create five real Git worktrees, exercise concurrent processes, occupied ports, stable assignments, explicit overrides and stale registrations. For a live CLI check using only Git and Python, build a local binary and run `python test_discovery.py /path/to/flip`. It checks five fixed preview URLs, shared switching, supervisor restart and cleanup without using port 8080.
+Discovery checks create five real Git worktrees, exercise concurrent processes, occupied ports, stable assignments, explicit overrides and stale registrations. For a live CLI check using only Git and Python, build a local binary and run `python test_discovery.py /path/to/flip`. It checks five fixed preview URLs, shared switching, detached startup through a registered project, supervisor restart and cleanup without using port 8080.
 
-Tests launch real child HTTP servers and check switching, backend restart, failed-start selection, port collisions, process cleanup, callback routing, API boundaries, prefix stripping, upgraded socket traffic and control authentication.
 Tests launch real HTTP servers and workers, verify named services, independent previews, disabled workers, immediate worker exits, config validation, and check switching, backend restart, failed-start selection, port collisions, process cleanup, callback routing, API boundaries, prefix stripping, upgraded socket traffic and control authentication.
 
 `TestDetachedSupervisor` builds a temporary CLI, or uses `FLIP_TEST_BINARY` when set, and launches separate CLI processes to check concurrent startup, stale tokens, streaming/socket idle protection, readiness timeouts and shutdown cleanup.

@@ -56,8 +56,8 @@ type config struct {
 	ControlPort        int                 `json:"control_port"`
 	APIPrefix          string              `json:"api_prefix"`
 	StripPrefix        bool                `json:"strip_api_prefix"`
-	TimeoutSeconds     int                 `json:"timeout_seconds"`
 	IdleTimeoutSeconds int                 `json:"idle_timeout_seconds,omitempty"`
+	TimeoutSeconds     int                 `json:"timeout_seconds"`
 	Worktrees          map[string]worktree `json:"worktrees"`
 	Discover           *discovery          `json:"discover,omitempty"`
 	root               string

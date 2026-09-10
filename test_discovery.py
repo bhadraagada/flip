@@ -12,7 +12,6 @@ import socket
 import subprocess
 import sys
 import tempfile
-import time
 import urllib.request
 
 
@@ -70,7 +69,6 @@ def main():
         file = repo / "flip.json"
         file.write_text(json.dumps(config))
         supervisor = None
-        log = None
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
                 assignments = list(pool.map(lambda _: flip("-config", str(file), "discover").stdout, range(6)))
@@ -86,34 +84,22 @@ def main():
             nested = repo / "nested"
             nested.mkdir()
             assert flip("discover", cwd=nested).stdout == assignments[0]
+            assert not (repo / ".flip" / "token").exists(), "discovery or registration started a supervisor"
             public.close()
             control.close()
 
             def start_supervisor():
-                nonlocal log, supervisor
-                log = (root / "supervisor.log").open("a")
-                supervisor = subprocess.Popen([str(binary), "-project", "fixture", "serve"], cwd=root, env=env, stdout=log, stderr=log, creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
-                deadline = time.monotonic() + 10
-                while time.monotonic() < deadline:
-                    if supervisor.poll() is not None:
-                        raise AssertionError((root / "supervisor.log").read_text())
-                    if flip("-project", "fixture", "status", ok=False).returncode == 0:
-                        return
-                    time.sleep(0.1)
-                raise AssertionError("supervisor did not become ready")
+                nonlocal supervisor
+                # Mark ownership before invoking the CLI so failures still clean up.
+                supervisor = True
+                flip("-project", "fixture", "up", names[-1])
+                assert "running:" in flip("-project", "fixture", "supervisor", "status").stdout
 
             def stop_supervisor():
-                nonlocal log, supervisor
-                if supervisor is not None:
-                    if supervisor.poll() is None:
-                        for name in names:
-                            flip("-project", "fixture", "down", name, ok=False)
-                        supervisor.terminate()
-                        supervisor.wait(timeout=10)
+                nonlocal supervisor
+                if supervisor:
+                    flip("-project", "fixture", "supervisor", "stop")
                     supervisor = None
-                if log is not None:
-                    log.close()
-                    log = None
 
             start_supervisor()
             for name in names:
@@ -147,7 +133,7 @@ def main():
             assert "unavailable" in flip("projects").stdout
             assert flip("-project", "fixture", "discover", ok=False).returncode
             flip("unregister", "fixture")
-            print("PASS: five Git worktrees, six concurrent discoveries, 10 stable assigned ports, directory-independent commands, preview isolation, supervisor restart, occupied ports, stale registration.")
+            print("PASS: five Git worktrees, six concurrent discoveries, 10 stable assigned ports, directory-independent commands, preview isolation, detached project startup/restart/cleanup, occupied ports, stale registration.")
         finally:
             # The cleanup function is defined before a supervisor can be created.
             if supervisor is not None:
