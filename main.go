@@ -142,7 +142,7 @@ func normalizeCommand(args []string) ([]string, error) {
 	if args[0] == "logs" && len(args) >= 3 {
 		return args, nil
 	}
-	expected := map[string]int{"init": 1, "serve": 1, "status": 1, "doctor": 1, "picker": 1, "up": 2, "use": 2, "down": 2, "restart": 3, "supervisor": 2, "register": 2, "unregister": 2, "projects": 1, "discover": 1}
+	expected := map[string]int{"init": 1, "serve": 1, "status": 1, "doctor": 1, "picker": 1, "logs": 3, "up": 2, "use": 2, "down": 2, "restart": 3, "supervisor": 2, "register": 2, "unregister": 2, "projects": 1, "discover": 1}
 	n, known := expected[args[0]]
 	if !known && len(args) == 1 {
 		return []string{"use", args[0]}, nil

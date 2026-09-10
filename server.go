@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -246,6 +247,9 @@ func (m *manager) close() {
 func control(m *manager, token string) http.Handler {
 	picker := newPicker(m)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Closing with an unread body can reset the connection before a client
+		// receives a rejection. Drain small control requests on every exit path.
+		defer io.Copy(io.Discard, io.LimitReader(r.Body, 4096))
 		if strings.HasPrefix(r.URL.Path, "/picker") {
 			picker.ServeHTTP(w, r)
 			return

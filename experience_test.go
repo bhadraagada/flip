@@ -8,10 +8,25 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestExperienceCommandSyntax(t *testing.T) {
+	for _, args := range [][]string{{"logs"}, {"logs", "one"}, {"doctor", "one"}, {"picker", "one"}} {
+		if _, err := normalizeCommand(args); err == nil {
+			t.Fatalf("incomplete command accepted: %v", args)
+		}
+	}
+	for _, args := range [][]string{{"doctor"}, {"picker"}, {"logs", "one", "web", "-f", "-n", "5"}, {"use", "logs"}} {
+		got, err := normalizeCommand(args)
+		if err != nil || !reflect.DeepEqual(args, got) {
+			t.Fatal(got, err)
+		}
+	}
+}
 
 func TestRecentLogs(t *testing.T) {
 	for _, tc := range []struct {
@@ -150,5 +165,23 @@ func TestDoctorDoesNotStartApps(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, ".flip")); !os.IsNotExist(err) {
 		t.Fatal("doctor created state")
+	}
+}
+
+func TestRejectedControlDrainsSmallBody(t *testing.T) {
+	m := newManager(context.Background(), config{ControlPort: 19091})
+	for _, path := range []string{"/", "/picker/api"} {
+		body := strings.NewReader(`{"Action":"use","Name":"one"}`)
+		r := httptest.NewRequest("POST", "http://"+address(m.c.ControlPort)+path, body)
+		r.Header.Set("Origin", "http://elsewhere.example")
+		r.Header.Set("Connection", "close")
+		w := httptest.NewRecorder()
+		control(m, "secret").ServeHTTP(w, r)
+		if w.Code != 403 || body.Len() != 0 {
+			t.Fatalf("%s: status %d, %d unread bytes", path, w.Code, body.Len())
+		}
+		if len(m.processes) != 0 {
+			t.Fatal("rejected request started a process")
+		}
 	}
 }

@@ -190,7 +190,8 @@ try:
     for path in ["/picker", "/picker.js", "/picker.css"]:
         body = request(base + path)[1]
         assert token not in body and session not in body and grant not in body
-    assert request(base + "/picker/api", {"Action": "use", "Name": "main"}, {**headers, "Origin": "http://evil.example"})[0] == 403
+    for _ in range(20):
+        assert request(base + "/picker/api", {"Action": "use", "Name": "main"}, {**headers, "Origin": "http://elsewhere.example"})[0] == 403
     assert request(base, {"Action": "down", "Name": "main"}, {"Authorization": "Bearer " + session, "Content-Type": "application/json"})[0] == 403
     code, body = request(base + "/picker/api", {"Action": "use", "Name": "main"}, headers)
     state = json.loads(body)
