@@ -121,7 +121,8 @@ try:
     worker_pid = (repo / "worker-pids.txt").read_text().splitlines()[-1]
     run(FLIP, "a")
     assert json.loads(get(preview_a)[1])["pid"] == site_pid
-    assert (repo / "worker-pids.txt").read_text().splitlines()[-1] != worker_pid
+    # Worker startup checks liveness; wait for the fixture to publish its new PID.
+    wait_for(lambda: (repo / "worker-pids.txt").read_text().splitlines()[-1] != worker_pid)
     assert json.loads(get(preview_b)[1])["tree"] == "b"
     status = run(FLIP, "status").stdout
     assert "disabled\tdisabled" in status and status.count("running:") == 4

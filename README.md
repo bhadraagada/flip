@@ -14,10 +14,10 @@ Install directly from GitHub:
 go install github.com/bhadraagada/flip@latest
 flip init
 # Edit flip.json with your app paths and commands.
-flip serve
+flip main
 ```
 
-Keep `serve` running and run `flip main` in another terminal to select your configured worktree. Ensure your Go bin directory is on PATH, normally `~/go/bin`.
+`flip main` starts a background supervisor and selects your configured worktree. The CLI returns while the preview stays running. Ensure your Go bin directory is on PATH, normally `~/go/bin`.
 
 Or build from a checkout:
 
@@ -25,10 +25,10 @@ Or build from a checkout:
 go build -o flip.exe .
 .\flip.exe init
 # Edit flip.json with your real paths, commands and health routes.
-.\flip.exe serve
+.\flip.exe main
 ```
 
-Keep `serve` running. In another terminal, from the same directory:
+From the same directory:
 
 ```powershell
 .\flip.exe up main
@@ -40,19 +40,19 @@ Keep `serve` running. In another terminal, from the same directory:
 
 To install `flip` on your Go binary path, run `go install .`. With that directory on PATH, use `flip main` as shorthand for `flip use main`. Existing commands such as `flip status` still work; use `flip use status` if a worktree has a reserved command name.
 
-On Linux/macOS, build with `go build -o flip .` and use `./flip`. Config lookup uses `-config`, then `-project`, then `FLIP_CONFIG`, then the nearest ancestor `flip.json`. From a linked Git worktree with no local config, Flip checks registered configs in the same repository, then the main checkout's `flip.json`. Multiple registered configs require an explicit `-project`. Put flags before the command. `serve` must still be running.
+On Linux/macOS, build with `go build -o flip .` and use `./flip`. Config lookup uses `-config`, then `-project`, then `FLIP_CONFIG`, then the nearest ancestor `flip.json`. From a linked Git worktree with no local config, Flip checks registered configs in the same repository, then the main checkout's `flip.json`. Multiple registered configs require an explicit `-project`. Put flags before the command.
 
 ## Configuration
 
-`init` writes an example without overwriting existing files. Edit it before starting `serve`. Add an entry under `worktrees` for each checkout, or use the discovery template below. Flip does not create Git worktrees.
+`init` writes an example without overwriting existing files. Edit it before starting your first preview. Add an entry under `worktrees` for each checkout, or use the discovery template below. Flip does not create Git worktrees.
 
 - Paths are relative to the config file. Each service has its own working directory.
 - Commands are argument arrays, executed directly without a shell. `{port}` expands to that service's configured port. Use an explicit Python executable such as `.venv/Scripts/python.exe` when needed.
 - On Windows, invoke executables directly, such as Node with a JavaScript entrypoint. `npm.cmd` requires an explicit shell. You can explicitly use a shell in your command if your project requires one; only use trusted config files.
 - Ports must be unique. Configure servers to bind `127.0.0.1`; use Vite `--strictPort` so it cannot silently move to another port.
 - `health` is an HTTP route on the internal service. Flip waits for a 2xx or 3xx response; redirects are not followed. Prefer a dedicated unauthenticated readiness route that only succeeds after initialization. The template uses `/`; change it to your service's readiness route.
-- Optional `env` is an object of per-service environment overrides. Flip also inherits the environment of `serve`. It does not parse `.env` files; your startup command or app must load them.
-- Config is read when `serve` starts. Stop and restart it after editing config. Keep the config unchanged while it runs.
+- Optional `env` is an object of per-service environment overrides. Flip also inherits the environment of the command that starts the supervisor. It does not parse `.env` files; your startup command or app must load them.
+- Config is read at supervisor startup. Run `flip supervisor stop` before editing config or changing inherited environment, then run `flip NAME` to restart it. Keep the config unchanged while it runs.
 
 The template uses a placeholder command, `your-dev-server`. Replace it with your actual executable and arguments. Flip does not install frameworks or infer their startup flags.
 
@@ -70,8 +70,6 @@ Register a config once to operate from any directory:
 flip -config /path/to/project/flip.json register my-app
 flip projects
 flip -project my-app discover
-flip -project my-app serve
-# In another terminal:
 flip -project my-app up feature-a
 flip unregister my-app
 ```
@@ -107,6 +105,7 @@ Use one service template for every existing Git worktree:
 New assignments skip listening ports and saved assignments from other configs. Existing assignments remain unchanged across commands and supervisor restarts, including while services are running. If another process later occupies a saved port, startup fails; Flip does not move a running preview to another port or stop the other process. An unrelated process can still claim a port between allocation and startup. Startup checks and bind errors detect this race. Explicit conflicts with saved assignments fail with an error.
 
 Registrations and port assignments live in the OS user config directory under `flip/state.json`, or in `FLIP_HOME` when set. Updates use a process lock and replace the state file only after config validation succeeds. Deleted or prunable Git worktrees are skipped, and their saved assignments are dropped on the next discovery. Allocations belonging to deleted config files are reclaimed during allocation. A running supervisor keeps its startup snapshot, so stop it before removing worktrees or editing config, then restart it to discover additions. Keep `FLIP_HOME` stable across terminals and outside version control.
+
 ## Named services and preview contract
 
 Each worktree may use `services: {"web": {...}, "api": {...}}` instead of legacy `ui`/`backend`. Mixing these forms in one worktree is rejected. Services retain `dir`, `command`, `port`, `health`, `env`, and `restart_on_use`. `type` defaults to `http`; named services default `restart_on_use` to false. Legacy `ui` and `backend` keep their existing defaults and routing.
@@ -132,7 +131,7 @@ Example named-service worktree entry, with paths and commands adapted to your ap
 }
 ```
 
-Optional `preview_port` on a worktree reserves a unique loopback port when `serve` starts. After `up NAME` or successful `use NAME`, `http://localhost:PREVIEW_PORT` routes to that worktree regardless of the fixed preview selection. `down NAME` makes its preview unavailable. The fixed `port` and `use` behavior stay intact. Ports are explicit and globally unique within the config; automatic assignment is deferred to discovery.
+Optional `preview_port` on a worktree reserves a unique loopback port when the supervisor starts. After `up NAME` or successful `use NAME`, `http://localhost:PREVIEW_PORT` routes to that worktree regardless of the fixed preview selection. `down NAME` makes its preview unavailable. The fixed `port` and `use` behavior stay intact. Ports are unique within the config; the discovery template can assign them automatically.
 
 `restart NAME SERVICE` accepts any configured enabled service name. The existing control request shape, `{Action, Name, Part}`, is unchanged; `Part` is the service name. `status` lists each named service, process state, selection, and optional preview URL. Logs use `.flip/NAME-SERVICE.log`.
 
@@ -156,9 +155,9 @@ Forwarded headers describe the public request. Flip preserves its Host header. C
 | `register NAME` | Saves the resolved config under a project name. |
 | `projects` | Lists project registrations and unavailable configs. |
 | `unregister NAME` | Removes a project name. |
-| `serve` | Starts the loopback proxy and control listener; no app starts automatically. |
-| `up NAME` | Starts missing services and waits for readiness. Does not select or restart healthy processes. |
-| `serve` | Binds the shared preview, configured worktree previews, and control listener. No app starts automatically. |
+| `serve` | Runs the supervisor in the foreground for debugging. Ctrl+C stops its owned services. |
+| `supervisor status` | Reports the authenticated supervisor PID without starting it. |
+| `supervisor stop` | Stops the supervisor and all its owned services, then waits for cleanup. |
 | `up NAME` | Starts missing enabled services, waits for startup, and publishes its optional worktree preview. Keeps shared selection and running processes. |
 | `use NAME` | Starts configured services, restarts those with restart_on_use enabled, then selects the worktree. |
 | `restart NAME SERVICE` | Restarts one enabled named service, retaining selection. Legacy `ui` and `backend` still work. |
@@ -167,12 +166,23 @@ Forwarded headers describe the public request. Flip preserves its Host header. C
 
 If a target fails to start, the previous selection remains. Services that started successfully may stay running after a later service fails; `down` cleans it up. Restarting the selected backend creates a short outage. For services without automatic reload, edits require `restart` or another `use` with restart_on_use enabled.
 
-Logs append to `.flip/NAME-SERVICE.log`, including worker output. Legacy names remain `.flip/NAME-ui.log` and `.flip/NAME-backend.log`. Ctrl+C in `serve` stops its owned service trees. Shutdown force-terminates services; it does not promise graceful completion of background jobs. Windows uses Job Objects; Unix uses process groups. Services must remain in the foreground and must not daemonize or escape their process group/job.
+`NAME`, `use`, `up`, and `restart` start the supervisor automatically when needed. `status`, `supervisor status`, `supervisor stop`, and `down` never start it.
+
+Logs append to `.flip/NAME-SERVICE.log`; detached supervisor diagnostics go to `.flip/supervisor.log`. Ctrl+C in `serve` stops its owned service trees. Shutdown force-terminates services; it does not promise graceful completion of background jobs. Windows uses Job Objects; Unix uses process groups. Services must remain in the foreground and must not daemonize or escape their process group/job.
+
+## Automatic startup and idle shutdown
+
+Concurrent CLI starts share one supervisor per config directory. OS-held locks survive CLI exit and release when the supervisor exits or crashes. Keep the empty `.flip/*.lock` files in place; deleting a live lock file can defeat locking on Unix. The supervisor binds every listener before replacing a stale token. A failed bind leaves the occupying process alone. No cleanup command kills a PID read from a stale file.
+
+Windows background windows stay hidden. Normal shutdown stops owned process trees on Windows and Unix; Unix also handles SIGTERM. Windows Job Objects clean services up after a supervisor crash. An uncatchable Unix kill such as SIGKILL can leave service groups running; Flip reports their occupied ports on the next startup instead of killing unverified processes.
+
+Idle shutdown is disabled by default. Set top-level `"idle_timeout_seconds": 900` to stop a worktree after fifteen minutes without traffic through either its shared or independent preview. Startup attempts, switches and restarts reset the timer, including attempts that leave partially started services. In-flight requests, streaming responses and upgraded sockets keep their original worktree alive for the whole connection, even after a shared-preview switch. Status checks and ordinary HTTP keep-alive connections between requests do not reset the timer.
+
+Expiry stops the worktree's services and clears its routes. The supervisor stays available; run `flip NAME` or `flip up NAME` to start that worktree again. Traffic sent directly to an internal service port and background worker jobs cannot be observed by this timer. Enable it only when stopping those jobs after preview inactivity is acceptable.
 
 ## Scope
 
-Flip uses one foreground supervisor per config. No background daemon installation, file watching, or database isolation.
-Flip uses explicit config and one foreground supervisor. No auto-discovery, automatic port allocation, background daemon installation, file watching, or database isolation.
+The supervisor is an ordinary detached process, not an installed OS service. It does not start at login. No file watching or database isolation is provided.
 
 All browser tabs on 8080 share the selection. Refresh them after switching; existing requests and sockets are not migrated. Finish login and active operations before switching. Cookies, local storage, databases, queues and scheduled jobs are not isolated by worktrees. Separate their configuration when branches could conflict.
 
@@ -185,10 +195,11 @@ go test ./...
 go vet ./...
 ```
 
-Discovery checks create five real Git worktrees, exercise concurrent processes, occupied ports, stable assignments, explicit overrides and stale registrations. For a live CLI check using only Git and Python, build a local binary and run `python test_discovery.py /path/to/flip`. It checks five fixed preview URLs, shared switching, supervisor restart and cleanup without using port 8080.
+Discovery checks create five real Git worktrees, exercise concurrent processes, occupied ports, stable assignments, explicit overrides and stale registrations. For a live CLI check using only Git and Python, build a local binary and run `python test_discovery.py /path/to/flip`. It checks five fixed preview URLs, shared switching, detached startup through a registered project, supervisor restart and cleanup without using port 8080.
 
-Tests launch real child HTTP servers and check switching, backend restart, failed-start selection, port collisions, process cleanup, callback routing, API boundaries, prefix stripping, upgraded socket traffic and control authentication.
 Tests launch real HTTP servers and workers, verify named services, independent previews, disabled workers, immediate worker exits, config validation, and check switching, backend restart, failed-start selection, port collisions, process cleanup, callback routing, API boundaries, prefix stripping, upgraded socket traffic and control authentication.
+
+`TestDetachedSupervisor` builds a temporary CLI, or uses `FLIP_TEST_BINARY` when set, and launches separate CLI processes to check concurrent startup, stale tokens, streaming/socket idle protection, readiness timeouts and shutdown cleanup.
 
 For the five-worktree CLI check, run `py test_worktrees.py`. Set `FLIP_BINARY` to an absolute worktree-local build path to test changes without replacing an installed binary. It requires Git, Node/npm, FastAPI and Uvicorn. It installs Vite in a temporary project, creates five real Git worktrees, runs ten servers, checks switching and a real HMR update, and stops its processes. The printed temporary directory retains the fixture, logs and `report.json`. It uses free ports so an existing preview on 8080 is left alone. This tests callback routing, not a real Google login.
 

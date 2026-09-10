@@ -137,6 +137,23 @@ func TestHelperProcess(t *testing.T) {
 		os.Exit(3)
 	}
 	err = http.ListenAndServe(address(port), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/stream" {
+			w.WriteHeader(200)
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+			return
+		}
+		if r.Header.Get("Upgrade") == "websocket" {
+			conn, rw, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+			rw.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n")
+			rw.Flush()
+			io.Copy(conn, rw)
+			return
+		}
 		if r.URL.Path == "/notready" {
 			w.WriteHeader(503)
 			return
@@ -354,13 +371,20 @@ func TestControlAuthentication(t *testing.T) {
 		method, token, origin string
 		want                  int
 	}{{"POST", "", "", 403}, {"POST", "Bearer secret", "https://evil.example", 403}, {"GET", "Bearer secret", "", 403}, {"POST", "Bearer secret", "", 200}} {
-		r := httptest.NewRequest(tc.method, "http://localhost", strings.NewReader(`{"Action":"status"}`))
-		r.Header.Set("Authorization", tc.token)
-		r.Header.Set("Origin", tc.origin)
-		w := httptest.NewRecorder()
-		control(m, "secret").ServeHTTP(w, r)
-		if w.Code != tc.want {
-			t.Fatal(w.Code, tc)
+		for _, action := range []string{"status", "supervisor-status", "supervisor-stop"} {
+			cancelled := false
+			m.cancel = func() { cancelled = true }
+			r := httptest.NewRequest(tc.method, "http://localhost", strings.NewReader(fmt.Sprintf(`{"Action":%q}`, action)))
+			r.Header.Set("Authorization", tc.token)
+			r.Header.Set("Origin", tc.origin)
+			w := httptest.NewRecorder()
+			control(m, "secret").ServeHTTP(w, r)
+			if w.Code != tc.want {
+				t.Fatal(w.Code, tc)
+			}
+			if cancelled != (action == "supervisor-stop" && tc.want == 200) {
+				t.Fatal("unauthorized stop or missing cancellation", action, tc)
+			}
 		}
 	}
 }

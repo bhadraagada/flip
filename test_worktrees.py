@@ -184,7 +184,9 @@ try:
 finally:
     for name in names:
         run(FLIP, "down", name, check=False)
-    supervisor.terminate()
+    run(FLIP, "supervisor", "stop", check=False)
+    if supervisor.poll() is None:
+        supervisor.terminate()
     supervisor.wait(timeout=10)
     supervisor_log.close()
     (ROOT / "report.json").write_text(json.dumps({"passed": REPORT, "public_port": public}, indent=2))

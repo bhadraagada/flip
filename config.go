@@ -52,15 +52,16 @@ type worktree struct {
 	Backend     service            `json:"backend"`
 }
 type config struct {
-	Port           int                 `json:"port"`
-	ControlPort    int                 `json:"control_port"`
-	APIPrefix      string              `json:"api_prefix"`
-	StripPrefix    bool                `json:"strip_api_prefix"`
-	TimeoutSeconds int                 `json:"timeout_seconds"`
-	Worktrees      map[string]worktree `json:"worktrees"`
-	Discover       *discovery          `json:"discover,omitempty"`
-	root           string
-	path           string
+	Port               int                 `json:"port"`
+	ControlPort        int                 `json:"control_port"`
+	APIPrefix          string              `json:"api_prefix"`
+	StripPrefix        bool                `json:"strip_api_prefix"`
+	IdleTimeoutSeconds int                 `json:"idle_timeout_seconds,omitempty"`
+	TimeoutSeconds     int                 `json:"timeout_seconds"`
+	Worktrees          map[string]worktree `json:"worktrees"`
+	Discover           *discovery          `json:"discover,omitempty"`
+	root               string
+	path               string
 }
 
 // normalizeLegacy is the only place that assigns meaning to ui/backend roles.
@@ -144,6 +145,9 @@ func readConfigMode(path string, allocate bool) (config, error) {
 }
 
 func validateConfig(c config) (config, error) {
+	if c.IdleTimeoutSeconds < 0 {
+		return c, fmt.Errorf("idle_timeout_seconds must be nonnegative")
+	}
 	var err error
 	ports := map[int]bool{}
 	checkPort := func(p int) error {
